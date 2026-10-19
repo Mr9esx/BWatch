@@ -1,0 +1,2 @@
+import {heroui} from '@heroui/react';
+export default {content:['./index.html','./src/**/*.{ts,tsx}','./node_modules/@heroui/**/theme/dist/**/*.{js,mjs,ts,jsx,tsx}'],theme:{extend:{fontFamily:{sans:['Inter','-apple-system','BlinkMacSystemFont','Segoe UI','PingFang SC','Microsoft YaHei','sans-serif']}}},darkMode:'class',plugins:[heroui({layout:{fontSize:{tiny:'14px',small:'14px',medium:'14px',large:'14px'}},themes:{light:{colors:{primary:{DEFAULT:'#6657e8',foreground:'#fff'},background:'#f7f8fa',focus:'#6657e8'}}}})]};

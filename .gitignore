@@ -1,0 +1,11 @@
+node_modules/
+web/dist/
+data/
+downloads/
+.tools/
+bin/
+.DS_Store
+*.log
+playwright-report/
+test-results/
+*.tsbuildinfo

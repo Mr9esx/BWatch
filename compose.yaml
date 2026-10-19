@@ -1,0 +1,14 @@
+services:
+  bilifetch:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - bilifetch_data:/app/data
+      - bilifetch_downloads:/app/downloads
+    stop_grace_period: 15s
+
+volumes:
+  bilifetch_data:
+  bilifetch_downloads:
