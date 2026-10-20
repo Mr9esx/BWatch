@@ -132,8 +132,6 @@ small{font-size:inherit}
 .view-switch{background:#f2f4f8;padding:3px;gap:2px;flex-shrink:0}
 .view-switch button{min-width:30px;min-height:30px;align-items:center;justify-content:center;color:#8791a5}
 .view-switch button.active{color:#6657e8;box-shadow:0 1px 4px #25304614}
-.creator-grid:not(.list-view){grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;align-items:stretch}
-.creator-grid:not(.list-view)>.creator-card{display:flex;flex-direction:column;padding:20px 20px 0;min-width:0}
 .creator-card:hover{transform:none;box-shadow:0 4px 16px #25304608}
 .creator-tags{gap:6px;row-gap:6px;flex-wrap:wrap;margin:16px 0}
 .platform-tag{background:#fceef5;color:#b43d7f}
@@ -146,7 +144,6 @@ small{font-size:inherit}
 .creator-metrics span{margin-bottom:6px}
 .creator-metrics small{color:#8791a5;margin-left:4px}
 .creator-card-bottom{gap:12px;border-top-color:#eef0f5;padding:14px 0;min-height:54px}
-.creator-grid:not(.list-view) .creator-card-bottom{margin-top:auto}
 .creator-card-bottom>span{min-width:0;flex-wrap:wrap;row-gap:2px}
 .creator-card-bottom small{margin-left:0}
 .add-creator-card{min-height:250px;background:#f9faff;border-color:#dce0ef;color:#667085}
@@ -162,7 +159,6 @@ small{font-size:inherit}
 @media(max-width:1000px){
  .main-content{padding:24px 22px 32px}
  .toolbar-right{flex:1 1 auto}
- .creator-grid:not(.list-view){gap:16px}
 }
 @media(max-width:620px){
  .mobile-topbar{display:flex;align-items:center;gap:12px;min-height:56px;padding:0 18px;border-bottom:1px solid #e4e7ee;background:#fff;color:#344054;font-weight:650}
@@ -177,17 +173,8 @@ small{font-size:inherit}
  .page-search{width:auto;min-width:0;flex:1 1 180px}
  .filter-toolbar>.page-search{flex:1 1 100%;margin:0}
  .toolbar-right .filter-select{flex:1 1 120px}
- .creator-grid:not(.list-view)>.creator-card{padding:18px 18px 0}
  .add-creator-card{min-height:150px}
 }
-
-/* 卡片最多两列，小窗口直接单列，避免为堆列数压缩内容。 */
-.creator-brief{display:flex;align-items:center;gap:6px 12px;flex-wrap:wrap;margin:14px 0;color:#667085;line-height:1.7}
-.creator-brief>span{white-space:nowrap}
-.creator-brief>span+span:before{content:'·';margin-right:12px;color:#b1b8c6}
-.creator-card-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0 12px}
-.creator-card-actions>button{min-width:0}
-@media(max-width:1100px){.creator-grid:not(.list-view){grid-template-columns:minmax(0,1fr)}}
 
 /* 订阅卡片概览与按 UP 主筛选的下载列表。 */
 .creator-content-counts{display:flex;align-items:center;flex-wrap:wrap;gap:6px 20px;margin-bottom:12px;color:#667085}
@@ -235,38 +222,3 @@ small{font-size:inherit}
 
 .creator-avatar{overflow:hidden}
 .creator-avatar img{display:block;width:100%;height:100%;object-fit:cover}
-
-/* 列表共用分隔线，主要操作同排，下载状态横向展示。 */
-.creator-grid.list-view{gap:0;border:1px solid #e4e7ee;border-radius:12px;background:#fff;overflow:hidden}
-.list-view>.creator-card{display:grid;grid-template-columns:minmax(170px,1fr) minmax(250px,1.3fr) auto auto;grid-template-areas:'identity brief actions toggle';gap:8px 16px;align-items:center;min-width:0;padding:12px 16px;border:0;border-bottom:1px solid #eef0f5;border-radius:0;box-shadow:none}
-.list-view>.creator-card:last-child{border-bottom:0}
-.list-view>.creator-card:hover{background:#fafbfe;box-shadow:none}
-.list-view .creator-card-top{grid-area:identity;min-width:0;gap:8px}
-.list-view .identity,.list-view .identity>div{min-width:0}
-.list-view .identity strong{max-width:none}
-.list-view .creator-avatar{width:32px;height:32px;flex-shrink:0}
-.list-view .creator-brief{grid-area:brief;gap:2px 10px;margin:0;line-height:1.6}
-.list-view .creator-brief>span+span:before{margin-right:10px}
-.list-view .creator-card-actions{grid-area:actions;gap:4px;margin:0;flex-wrap:nowrap}
-.list-view .creator-content-counts{grid-column:1/-1;margin:0;gap:4px 24px}
-.list-view .creator-card-bottom{grid-area:toggle;gap:10px;min-height:0;padding:0;border:0}
-.list-view .creator-card-bottom>span{white-space:nowrap;flex-wrap:nowrap}
-.list-view .creator-download-summary{grid-column:1/-1;display:grid;grid-template-columns:auto minmax(0,1fr) minmax(150px,220px);align-items:center;gap:4px 16px;margin:0;padding:8px 0 0;border-top:1px solid #eef0f5}
-.list-view .creator-download-summary-top>span{white-space:nowrap}
-.list-view .creator-current-title,.list-view .creator-waiting-reason,.list-view .creator-download-progress{margin:0;min-width:0}
-.list-view .creator-waiting-reason{grid-column:2/-1}
-.list-view .creator-download-progress>div:last-child{margin-top:2px;gap:4px}
-.list-view .history-progress{grid-column:1/-1;display:flex;align-items:center;flex-wrap:wrap;gap:4px 16px;padding:8px 10px;margin:0}
-.list-view .history-progress>div:first-child{gap:12px}
-.list-view .history-progress p{margin:0}
-.list-view .history-actions{margin:0 0 0 auto}
-.list-view .history-error,.list-view .creator-error{grid-column:1/-1;flex-basis:100%;margin:0}
-@media(max-width:1400px){
- .list-view>.creator-card{grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:'identity actions toggle' 'brief brief brief';gap:6px 12px}
-}
-@media(max-width:800px){
- .list-view>.creator-card{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:'identity toggle' 'brief brief';padding:12px}
- .list-view .creator-download-summary{grid-template-columns:auto minmax(0,1fr);gap:4px 10px}
- .list-view .creator-download-progress{grid-column:2}
- .list-view .creator-card-actions{grid-area:auto;grid-column:1/-1;justify-content:flex-end}
-}

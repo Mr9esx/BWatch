@@ -13,9 +13,12 @@ COPY internal/ internal/
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /bilifetch ./cmd/bilifetch
 
 FROM python:3.12-slim-bookworm
+COPY requirements/yt-dlp.txt /tmp/yt-dlp-requirements.txt
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir yt-dlp==2026.8.19 \
+    && pip install --no-cache-dir -r /tmp/yt-dlp-requirements.txt \
+    && yt-dlp --version \
+    && rm /tmp/yt-dlp-requirements.txt \
     && useradd --uid 10001 --create-home bilifetch
 WORKDIR /app
 COPY --from=server /bilifetch /usr/local/bin/bilifetch

@@ -89,6 +89,27 @@ assert.match(render([]),/下载列表/,'没有任务时仍应能打开下载列�
 const idle=render([]);
 for(const label of ['暂无待处理下载','最近检查','预计下次检查','尚未检查','等待调度'])assert.ok(idle.includes(label),'空闲卡片应展示真实监听状态：'+label);
 assert.doesNotMatch(active,/暂无待处理下载/,'有活动下载时不能显示空闲状态');
+const historyJob={id:'history',status:'running',limit:5,watchVideos:true,watchDynamics:true,offset:'',pages:0,videos:0,dynamics:0,nextPageAt:'2099-10-19T00:00:00Z',startedAt:'2026-10-20T00:00:00Z',error:''};
+for(const status of ['running','paused','failed']){
+ const historyOnly=render([],{creators:[{...creator,historyJob:{...historyJob,status}}]});
+ assert.doesNotMatch(historyOnly,/暂无待处理下载/,'历史拉取尚未结束时不能显示空闲提示');
+ assert.equal((historyOnly.match(/\bcreator-activity-panel\b/g)||[]).length,1,'历史拉取与空闲提示必须共用一个状态区');
+ assert.match(historyOnly,/取消拉取/,'收紧历史状态区不能丢失取消操作');
+}
+const historyDownloading=render([task('历史视频下载','downloading')],{creators:[{...creator,historyJob}]});
+assert.equal((historyDownloading.match(/\bcreator-activity-panel\b/g)||[]).length,1,'下载与历史拉取并行时不能叠加两个状态面板');
+assert.match(historyDownloading,/aria-valuenow="37.5"/,'历史拉取期间仍须保留下载进度');
+assert.match(historyDownloading,/暂停拉取/,'下载期间仍须能暂停历史拉取');
+assert.match(historyDownloading,/查看当前视频下载/,'固定高度状态区应提供完整当前任务的详情入口');
+const historyQueued=render([task('等待视频','queued'),{...task('等待图文','queued'),kind:'dynamic'}],{creators:[{...creator,historyJob:{...historyJob,pages:3,videos:2,dynamics:4,limit:50}}]});
+for(const label of ['下一条视频','等待视频','即将开始下载','暂停拉取','取消拉取'])assert.ok(historyQueued.includes(label),'等待下载时应展示下一条内容、开始提示与历史操作：'+label);
+for(const markup of [historyQueued,historyDownloading]){
+ assert.equal((markup.match(/\bcreator-activity-header\b/g)||[]).length,1,'各状态应共用一个状态与操作行');
+ assert.equal((markup.match(/\bcreator-activity-details\b/g)||[]).length,1,'各状态应共用一个时间或进度详情行');
+}
+const queuedWithoutHistory=render([task('普通视频','queued'),{...task('普通图文','queued'),kind:'dynamic'}]);
+for(const label of ['下一条视频','普通视频','即将开始下载'])assert.ok(queuedWithoutHistory.includes(label),'普通排队状态应展示下一条内容与开始提示：'+label);
+assert.match(render([],{creators:[{...creator,historyJob:{...historyJob,status:'completed'}}]}),/暂无待处理下载/,'历史拉取完成且没有待处理任务时应恢复空闲提示');
 const scheduled={...creator,lastChecked:'2099-10-19T00:00:00Z',nextCheckAt:'2099-10-19T00:10:00Z'};
 assert.match(render([],{creators:[scheduled]}),/dateTime="2099-10-19T00:30:00.000Z"/,'预计检查时间必须同时满足检查间隔，不能仅取更早的重试时间');
 assert.match(render([],{creators:[{...scheduled,nextCheckAt:'2099-10-19T01:00:00Z'}]}),/dateTime="2099-10-19T01:00:00.000Z"/,'错误退避比间隔更晚时应显示退避时间');
@@ -109,5 +130,6 @@ assert.match(render([],{creators:[{...creator,contentTotals:{videos:0}}]}),/aria
 assert.match(render([],{creators:[{...creator,seenDynamics:{old:true},contentTotals:{videos:12}}]}),/aria-label="图文：全部至少 1，已拉取 0"/,'平台缺少某种总量时，该类型独立回退，不能伪造零');
 const longError='下载失败：ERROR: HTTP Error 412: Precondition Failed。请检查登录状态与网络设置，完整错误末尾不能丢失。';
 const errorCard=render([],{creators:[{...creator,lastError:longError}]});
-assert.match(errorCard,new RegExp('tabindex="0"[^>]*>'+longError),'完整错误应保留在可键盘聚焦的提示触发器中');
+assert.ok(errorCard.includes(`title="${longError}"`),'固定高度状态区必须保留完整错误供按需查看');
+assert.match(errorCard,/查看检查错误/,'检查错误应提供可键盘访问的详情入口');
 console.log('UP 主卡片下载状态检查通过：进度、速度、入口、任务隔离、暂停、完成与空状态');

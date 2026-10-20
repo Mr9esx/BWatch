@@ -18,13 +18,11 @@
 
 ## 本地启动
 
-需要 **Go 1.24+、Node.js 22、Python 3.10+、yt-dlp 和 FFmpeg**。以 macOS 为例：
+需要 **Go 1.24+ 和 Node.js 22**。macOS 安装脚本会一并安装 Python、yt-dlp 和 FFmpeg；Linux 用户需自行准备 Python 3.10+ 和 FFmpeg。以 macOS 为例：
 
 ```sh
-brew install go node@22 ffmpeg
-python3 -m venv .tools/venv
-.tools/venv/bin/pip install yt-dlp
-export PATH="$PWD/.tools/venv/bin:$PATH"
+brew install go node@22
+make install-ytdlp
 make install
 make build
 make run
@@ -32,7 +30,7 @@ make run
 
 打开 [http://127.0.0.1:8090](http://127.0.0.1:8090)。首次进入是真实空工作区，点击「添加订阅」开始。
 
-若 yt-dlp 不在 PATH，可以显式指定：
+安装脚本会把固定版本的 yt-dlp 安装到项目本地的 `.tools/venv`。安装后重启 Go 服务，环境检查和下载会自动识别该虚拟环境及常见 Homebrew 路径；`make run` 和 `make dev-server` 也会优先使用项目内的 yt-dlp。也可以显式指定：
 
 ```sh
 BILIFETCH_YTDLP="$PWD/.tools/venv/bin/yt-dlp" ./bin/bilifetch
@@ -53,7 +51,7 @@ make dev-web
 docker compose up -d --build
 ```
 
-访问 [http://127.0.0.1:8090](http://127.0.0.1:8090)。镜像包含 yt-dlp 和 FFmpeg，使用 UID 10001 运行。状态、下载分别保存在持久化命名卷中。
+访问 [http://127.0.0.1:8090](http://127.0.0.1:8090)。Docker 构建时从 `requirements/yt-dlp.txt` 安装固定版本的 yt-dlp，并在构建阶段检查可执行文件；镜像同时包含 FFmpeg，使用 UID 10001 运行。状态、下载分别保存在持久化命名卷中。
 
 导出已下载文件：
 

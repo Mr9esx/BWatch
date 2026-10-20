@@ -1,6 +1,7 @@
-import {useEffect,useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import {Button} from '@heroui/react';
-import {ArrowDownToLine,ArrowRight,ChevronLeft,ChevronRight,FileText,FolderOpen,Grid2X2,List,Play,Search,Users,X} from 'lucide-react';
+import {useWindowVirtualizer} from '@tanstack/react-virtual';
+import {ArrowDownToLine,ArrowRight,FileText,FolderOpen,Grid2X2,List,Play,Search,Users,X} from 'lucide-react';
 import {useApp} from './context';
 import {Avatar,bytes,dateTime,Empty,External,FileLocation,Kind,PageSearch,relative,Thumbnail} from './components';
 import type {Creator,Task} from './types';
@@ -34,7 +35,7 @@ export function LibraryItem({task,layout='grid',showAuthor=true}:{task:Task;layo
  const imageCount=task.files?.length??task.images?.length??0;
  const download=task.kind==='dynamic'?`/api/tasks/${encodeURIComponent(task.id)}/archive`:`/api/tasks/${encodeURIComponent(task.id)}/files/0?download=1`;
  return <article className={`library-item ${layout==='grid'?'library-card panel':'library-row panel'}`}>
-  <div className="library-cover"><Thumbnail task={task} onPress={()=>preview(task)}/><Kind kind={task.kind}/>{task.kind==='dynamic'&&<span className="image-count">{imageCount?`${imageCount} 张图片`:'纯文字'}</span>}</div>
+  <div className="library-cover">{task.kind==='dynamic'&&!imageCount?<button type="button" className="library-text-cover" aria-label={`预览文字动态：${task.title}`} onClick={()=>preview(task)}><span>{task.content||task.title}</span></button>:<Thumbnail task={task} onPress={()=>preview(task)}/>}<Kind kind={task.kind}/>{task.kind==='dynamic'&&<span className="image-count">{imageCount?`${imageCount} 张图片`:'纯文字'}</span>}</div>
   <div className="library-card-body">
    <button type="button" className="library-title" title={task.title} onClick={()=>preview(task)}>{task.title}</button>
    {showAuthor&&<div className="library-author"><Avatar name={creator?.name||task.creatorName} src={creator?.avatar} small/><span>{creator?.name||task.creatorName}</span></div>}
@@ -47,7 +48,8 @@ export function LibraryItem({task,layout='grid',showAuthor=true}:{task:Task;layo
 export default function Library(){
  const {state,search,setSearch,navigate}=useApp();
  const [creatorId,setCreatorId]=useState<string|null|undefined>(undefined);const [authorSearch,setAuthorSearch]=useState('');
- const [kind,setKind]=useState<LibraryKind>('all');const [sort,setSort]=useState<LibrarySort>('new');const [layout,setLayout]=useState<'grid'|'list'>('grid');const [pageIndex,setPageIndex]=useState(1);
+ const [kind,setKind]=useState<LibraryKind>('all');const [sort,setSort]=useState<LibrarySort>('new');const [layout,setLayout]=useState<'grid'|'list'>('grid');const [loadedCount,setLoadedCount]=useState(24);const [resultsWidth,setResultsWidth]=useState(0);
+ const resultsRef=useRef<HTMLElement>(null);const listRef=useRef<HTMLDivElement>(null);const sentinelRef=useRef<HTMLDivElement>(null);const loadingMoreRef=useRef(false);const [scrollMargin,setScrollMargin]=useState(0);
  const complete=state.tasks.filter(task=>task.status==='completed');const groups=getLibraryGroups(complete,state.creators);
  const firstCreatorId=groups[0]?.id;
  useEffect(()=>{if(creatorId===undefined&&firstCreatorId)setCreatorId(firstCreatorId)},[creatorId,firstCreatorId]);
@@ -55,11 +57,14 @@ export default function Library(){
  const selected=groups.find(group=>group.id===activeCreatorId);const scope=activeCreatorId?selected?.tasks||[]:complete;
  const authors=groups.filter(group=>`${group.name} ${state.creators.find(creator=>creator.id===group.id)?.url||''}`.toLocaleLowerCase().includes(authorSearch.trim().toLocaleLowerCase()));
  const searched=selectLibraryTasks(scope,{query:search},state.creators);const items=selectLibraryTasks(scope,{kind,query:search,sort},state.creators);
- const total=items.length;const pageCount=Math.max(1,Math.ceil(total/12));const currentPage=Math.min(pageIndex,pageCount);const offset=(currentPage-1)*12;
- useEffect(()=>setPageIndex(1),[activeCreatorId,kind,sort,search]);
- const chooseCreator=(id:string|null)=>{setCreatorId(id);setSearch('');setPageIndex(1);window.scrollTo({top:0,behavior:'smooth'})};
- const changePage=(page:number)=>{setPageIndex(page);window.scrollTo({top:0,behavior:'smooth'})};
- const clearFilters=()=>{setSearch('');setKind('all');setSort('new');setPageIndex(1)};
+ const total=items.length;const columns=layout==='grid'?Math.max(1,Math.floor((resultsWidth+18)/(280+18))):1;const visibleItems=items.slice(0,loadedCount);const rows=Array.from({length:Math.ceil(visibleItems.length/columns)},(_,index)=>visibleItems.slice(index*columns,(index+1)*columns));
+ const rowVirtualizer=useWindowVirtualizer({count:rows.length,estimateSize:()=>layout==='grid'?430:145,overscan:3,scrollMargin,gap:layout==='grid'?18:14,measureElement:element=>element.getBoundingClientRect().height,getItemKey:index=>rows[index]?.[0]?.id??index});
+ useEffect(()=>{const element=resultsRef.current;const list=listRef.current;if(!element||!list)return;const update=()=>{setResultsWidth(list.clientWidth);setScrollMargin(list.getBoundingClientRect().top+window.scrollY)};const observer=new ResizeObserver(update);observer.observe(element);observer.observe(list);update();window.addEventListener('resize',update);return()=>{observer.disconnect();window.removeEventListener('resize',update)}},[total]);
+ useEffect(()=>{setLoadedCount(24);window.scrollTo({top:0});loadingMoreRef.current=false},[activeCreatorId,kind,sort,search,layout]);
+ useEffect(()=>{const sentinel=sentinelRef.current;if(!sentinel||loadedCount>=total)return;const observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting)&&!loadingMoreRef.current){loadingMoreRef.current=true;setLoadedCount(count=>Math.min(count+24,total))}},{rootMargin:'500px'});observer.observe(sentinel);return()=>observer.disconnect()},[loadedCount,total]);
+ useEffect(()=>{loadingMoreRef.current=false},[loadedCount]);
+ const chooseCreator=(id:string|null)=>{setCreatorId(id);setSearch('');window.scrollTo({top:0,behavior:'smooth'})};
+ const clearFilters=()=>{setSearch('');setKind('all');setSort('new')};
  const totalSize=complete.reduce((sum,task)=>sum+task.bytes,0);
  return <div className="page-enter library-page">
   <div className="page-heading"><h1>内容库</h1><div className="library-total"><Users size={16}/>{groups.length} 位 UP 主<span className="middot">·</span>{complete.length} 条归档<span className="middot">·</span>{bytes(totalSize)}</div></div>
@@ -73,12 +78,11 @@ export default function Library(){
      {!authors.length&&<p className="library-author-empty muted">{groups.length?'没有找到相关 UP 主':'归档后自动显示 UP 主'}</p>}
     </nav>
    </aside>
-   <section className="library-results" aria-label="归档内容">
+   <section ref={resultsRef} className="library-results" aria-label="归档内容">
     <header className="library-scope-heading">{selected?<Avatar name={selected.name} src={selected.avatar}/>:<span className="library-all-icon"><FolderOpen size={22}/></span>}<div><h2>{selected?.name||'全部内容'}</h2><p>{scope.length} 条归档 · 视频 {scope.filter(task=>task.kind==='video').length} · 图文 {scope.filter(task=>task.kind==='dynamic').length} · {bytes(selected?.size??totalSize)}</p></div></header>
     <div className="filter-toolbar library-browser-toolbar"><PageSearch placeholder={activeCreatorId?'搜索该 UP 主的标题、内容或路径':'搜索 UP 主、标题、内容或路径'}/><select className="filter-select" aria-label="内容排序" value={sort} onChange={event=>setSort(event.target.value as LibrarySort)}><option value="new">最近归档</option><option value="old">最早归档</option><option value="size">占用最大</option><option value="name">名称排序</option></select></div>
     <div className="library-content-toolbar"><div className="tab-group">{([['all','全部'],['video','视频'],['dynamic','图文动态']] as const).map(([key,label])=><button key={key} className={kind===key?'active':''} aria-pressed={kind===key} onClick={()=>setKind(key)}>{label}<span>{searched.filter(task=>key==='all'||task.kind===key).length}</span></button>)}</div><div className="library-view-tools"><span className="muted" role="status">{total} 条内容{search.trim()?'符合搜索':''}</span><div className="view-switch"><button aria-label="内容卡片视图" aria-pressed={layout==='grid'} className={layout==='grid'?'active':''} onClick={()=>setLayout('grid')}><Grid2X2 size={16}/></button><button aria-label="内容列表视图" aria-pressed={layout==='list'} className={layout==='list'?'active':''} onClick={()=>setLayout('list')}><List size={17}/></button></div></div></div>
-    {total>0?<div className={layout==='grid'?'library-grid':'library-list'}>{items.slice(offset,offset+12).map(task=><LibraryItem key={task.id} task={task} layout={layout} showAuthor={activeCreatorId===null}/>)}</div>:<div className="panel"><Empty icon={<FolderOpen size={30}/>} title={complete.length?'没有找到相关归档':'暂无归档内容'} description={complete.length?'尝试其他关键词或清除类型筛选。':'归档完成后，会自动按 UP 主整理到这里。'} action={complete.length?<Button variant="flat" onPress={clearFilters}>清除筛选</Button>:<Button color="primary" variant="flat" onPress={()=>navigate('creators')} endContent={<ArrowRight size={15}/>}>前往订阅管理</Button>}/></div>}
-    {total>0&&<footer className="library-pagination"><span className="muted">显示 {offset+1}–{Math.min(offset+12,total)} / {total} 条内容</span>{pageCount>1&&<div><Button size="sm" variant="bordered" isDisabled={currentPage===1} startContent={<ChevronLeft size={15}/>} onPress={()=>changePage(currentPage-1)}>上一页</Button><span aria-live="polite">{currentPage} / {pageCount}</span><Button size="sm" variant="bordered" isDisabled={currentPage===pageCount} endContent={<ChevronRight size={15}/>} onPress={()=>changePage(currentPage+1)}>下一页</Button></div>}</footer>}
+    {total>0?<div ref={listRef} className="library-scroll-area" aria-label="滚动浏览归档内容"><div className="library-virtual-canvas" style={{height:rowVirtualizer.getTotalSize()}}>{rowVirtualizer.getVirtualItems().map(virtualRow=><div key={virtualRow.key} ref={rowVirtualizer.measureElement} data-index={virtualRow.index} className={`library-virtual-row ${layout==='grid'?'grid-row':'list-row'}`} style={{position:'absolute',top:0,left:0,width:'100%',transform:`translateY(${virtualRow.start-scrollMargin}px)`,gridTemplateColumns:layout==='grid'?`repeat(${columns},minmax(0,1fr))`:undefined}}>{rows[virtualRow.index].map(task=><LibraryItem key={task.id} task={task} layout={layout} showAuthor={activeCreatorId===null}/>)}</div>)}</div>{loadedCount<total&&<div ref={sentinelRef} className="library-load-sentinel" role="status">向下滚动加载更多…</div>}{loadedCount>=total&&total>24&&<div className="library-load-sentinel" role="status">已显示全部 {total} 条内容</div>}</div>:<div className="panel"><Empty icon={<FolderOpen size={30}/>} title={complete.length?'没有找到相关归档':'暂无归档内容'} description={complete.length?'尝试其他关键词或清除类型筛选。':'归档完成后，会自动按 UP 主整理到这里。'} action={complete.length?<Button variant="flat" onPress={clearFilters}>清除筛选</Button>:<Button color="primary" variant="flat" onPress={()=>navigate('creators')} endContent={<ArrowRight size={15}/>}>前往订阅管理</Button>}/></div>}
    </section>
   </div>
  </div>

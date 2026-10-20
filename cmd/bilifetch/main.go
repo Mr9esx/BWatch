@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,7 +22,30 @@ func env(key, fallback string) string {
 	}
 	return fallback
 }
+
+func addLocalToolPaths() {
+	paths := []string{}
+	if workingDir, err := os.Getwd(); err == nil {
+		paths = append(paths, filepath.Join(workingDir, ".tools", "venv", "bin"))
+	}
+	if runtime.GOOS == "darwin" {
+		paths = append(paths, "/opt/homebrew/bin", "/usr/local/bin")
+	}
+	current := filepath.SplitList(os.Getenv("PATH"))
+	seen := make(map[string]bool, len(paths)+len(current))
+	joined := make([]string, 0, len(paths)+len(current))
+	for _, path := range append(paths, current...) {
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		joined = append(joined, path)
+	}
+	_ = os.Setenv("PATH", strings.Join(joined, string(os.PathListSeparator)))
+}
+
 func main() {
+	addLocalToolPaths()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	a, err := app.New(env("BILIFETCH_DATA", "data"), env("BILIFETCH_DOWNLOADS", "downloads"), env("BILIFETCH_YTDLP", "yt-dlp"))

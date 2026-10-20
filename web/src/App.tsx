@@ -1,6 +1,6 @@
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {Button,Input,Modal,ModalBody,ModalContent,ModalFooter,ModalHeader,Select,SelectItem} from '@heroui/react';
-import {ArrowDownToLine,Check,ChevronRight,Clapperboard,ExternalLink,FileText,FolderHeart,LayoutDashboard,Menu,Plus,RefreshCw,Settings,Terminal,TriangleAlert,Users,X} from 'lucide-react';
+import {ArrowDownToLine,Check,ChevronLeft,ChevronRight,Clapperboard,ExternalLink,FileText,FolderHeart,LayoutDashboard,Menu,Plus,RefreshCw,Settings,Terminal,TriangleAlert,Users,X} from 'lucide-react';
 import {request} from './api';
 import {AppContext} from './context';
 import type {CreatorInput,Health,Page,State,Task} from './types';
@@ -18,8 +18,9 @@ export default function App(){
  const [page,setPage]=useState<Page>(()=>{const hash=location.hash.slice(1);return nav.some(n=>n.id===hash)?hash as Page:'overview'});
  const [state,setState]=useState<State>(emptyState);
  const [imageIndex,setImageIndex]=useState<number|null>(null);
+ const [previewImageIndex,setPreviewImageIndex]=useState(0);
  const [health,setHealth]=useState<Health|null>(null);const [connectionError,setConnectionError]=useState('');const [search,setSearch]=useState('');const [addOpen,setAddOpen]=useState(false);const [sidebarOpen,setSidebarOpen]=useState(false);const [selected,setSelected]=useState<Task|null>(null);const [confirmation,setConfirmation]=useState<Confirmation|null>(null);const [confirmBusy,setConfirmBusy]=useState(false);
- useEffect(()=>setImageIndex(null),[selected?.id]);
+ useEffect(()=>{setImageIndex(null);setPreviewImageIndex(0)},[selected?.id]);
  const [toast,setToast]=useState<{message:string;error:boolean}|null>(null);const toastTimer=useRef<ReturnType<typeof setTimeout>|null>(null);
  const notify=useCallback((message:string,error=false)=>{setToast({message,error});if(toastTimer.current)clearTimeout(toastTimer.current);toastTimer.current=setTimeout(()=>setToast(null),5000)},[]);
  const refresh=useCallback(async()=>{const [s,h]=await Promise.all([request<State>('/state'),request<Health>('/health')]);setState(s);setHealth(h);setConnectionError('')},[]);
@@ -46,8 +47,34 @@ export default function App(){
    </div>
   </div>
   <AddCreatorModal isOpen={addOpen} onClose={()=>setAddOpen(false)} settings={state.settings} onSubmit={async input=>{const ok=await act('/creators','POST',input,'订阅已添加');if(ok)setAddOpen(false);return ok}}/>
-  <Modal isOpen={!!previewTask} onClose={()=>{setImageIndex(null);setSelected(null)}} size="3xl" scrollBehavior="inside" classNames={{base:'app-modal preview-modal',header:'modal-header'}}><ModalContent>{previewTask&&<><ModalHeader><div><h2>{previewTask.title}</h2><div className="preview-meta"><Kind kind={previewTask.kind}/><span>{previewTask.creatorName}</span><Status status={previewTask.status}/></div></div></ModalHeader><ModalBody data-slot="body">{previewTask.error&&<ErrorNote>{previewTask.error}</ErrorNote>}{previewTask.status==='completed'&&<FileLocation task={previewTask}/>}{previewTask.kind==='video'?(previewTask.status==='completed'?<video className="video-player" src={`/api/tasks/${previewTask.id}/files/0`} controls autoPlay={false} preload="metadata"/>:<div className="video-placeholder">{previewTask.thumbnail&&<img src={previewTask.thumbnail} alt="视频封面" referrerPolicy="no-referrer"/>}<div><Clapperboard size={35}/><p>视频下载后可预览</p></div></div>):<article className="dynamic-preview">{previewTask.content&&<p>{previewTask.content}</p>}<div className="dynamic-images">{previewTask.files?.map((src,i)=><button type="button" className="dynamic-image-button" key={src} aria-label={`放大图片 ${i+1}`} onClick={()=>setImageIndex(i)}><img src={`/api/tasks/${encodeURIComponent(previewTask.id)}/files/${i+1}`} alt={`动态图片 ${i+1}`} loading="lazy" referrerPolicy="no-referrer"/><span>点击放大</span></button>)}</div>{previewTask.status!=='completed'&&<p className="muted">图片尚未下载。</p>}</article>}</ModalBody><ModalFooter data-slot="footer"><span className="preview-size">{bytes(previewTask.bytes)}{previewTask.kind==='video'&&` · ${quality(previewTask.quality)}`}</span><Button as="a" href={previewTask.url} target="_blank" rel="noreferrer" variant="bordered" endContent={<ExternalLink size={14}/>}>查看原文</Button>{previewTask.status==='completed'&&<Button as="a" href={previewTask.kind==='dynamic'?`/api/tasks/${previewTask.id}/archive`:`/api/tasks/${previewTask.id}/files/0?download=1`} color="primary" startContent={<ArrowDownToLine size={15}/>}>{previewTask.kind==='dynamic'?'下载图文':'下载文件'}</Button>}</ModalFooter></>}</ModalContent></Modal>
-  <ImageViewer sources={previewImages} index={imageIndex} title={previewTask?.title||''} onIndexChange={setImageIndex} onClose={()=>setImageIndex(null)}/>
+  <Modal isOpen={!!previewTask} onClose={()=>{setImageIndex(null);setSelected(null)}} size="5xl" scrollBehavior="inside" classNames={{base:'app-modal preview-modal',header:'modal-header'}}>
+   <ModalContent>
+    {previewTask&&<>
+     <ModalHeader className="preview-header">
+      <div className="preview-heading">
+       <h2>{previewTask.title}</h2>
+       <div className="preview-meta"><Kind kind={previewTask.kind}/><span>{previewTask.creatorName}</span><Status status={previewTask.status}/></div>
+      </div>
+     </ModalHeader>
+     <ModalBody data-slot="body" className="preview-body">
+      <section className="preview-stage" aria-label="内容预览">
+       {previewTask.kind==='video'?(previewTask.status==='completed'?<video className="video-player" src={`/api/tasks/${previewTask.id}/files/0`} controls autoPlay={false} preload="metadata"/>:<div className="video-placeholder">{previewTask.thumbnail&&<img src={previewTask.thumbnail} alt="视频封面" referrerPolicy="no-referrer"/>}<div><Clapperboard size={35}/><p>视频下载后可预览</p></div></div>):previewTask.status==='completed'&&previewImages.length===0?<article className="dynamic-preview dynamic-text-only"><p>{previewTask.content||previewTask.title}</p></article>:<article className="dynamic-preview">{previewTask.status==='completed'&&previewImages.length>0?<><div className="dynamic-gallery"><div className="dynamic-main-image"><Button isIconOnly variant="flat" aria-label="上一张图片" isDisabled={previewImageIndex===0} onPress={()=>setPreviewImageIndex(i=>Math.max(0,i-1))}><ChevronLeft size={22}/></Button><button type="button" className="dynamic-main-image-open" aria-label={`放大图片 ${previewImageIndex+1}`} onClick={()=>setImageIndex(previewImageIndex)}><img src={previewImages[previewImageIndex]} alt={`${previewTask.title} · 第 ${previewImageIndex+1} 张图片`} referrerPolicy="no-referrer"/></button><Button isIconOnly variant="flat" aria-label="下一张图片" isDisabled={previewImageIndex===previewImages.length-1} onPress={()=>setPreviewImageIndex(i=>Math.min(previewImages.length-1,i+1))}><ChevronRight size={22}/></Button></div><div className="dynamic-thumbnails" role="list" aria-label="图片缩略图">{previewImages.map((src,i)=><button type="button" role="listitem" className={i===previewImageIndex?'active':''} key={src} aria-label={`查看第 ${i+1} 张图片`} aria-current={i===previewImageIndex?'true':undefined} onClick={()=>setPreviewImageIndex(i)}><img src={src} alt="" loading="lazy" referrerPolicy="no-referrer"/></button>)}</div></div>{previewTask.content&&<p>{previewTask.content}</p>}</>:<>{previewTask.content&&<p>{previewTask.content}</p>}{previewTask.status!=='completed'&&<p className="muted">图片尚未下载。</p>}</>}</article>}
+      </section>
+      <aside className="preview-details">
+       {previewTask.error&&<ErrorNote>{previewTask.error}</ErrorNote>}
+       <div className="preview-detail-block"><span className="preview-detail-label">UP 主</span><strong>{previewTask.creatorName}</strong></div>
+       <div className="preview-detail-block"><span className="preview-detail-label">内容信息</span><div className="preview-detail-facts"><span>{bytes(previewTask.bytes)}</span>{previewTask.kind==='video'&&<span>{quality(previewTask.quality)}</span>}</div></div>
+       {previewTask.status==='completed'&&<details className="preview-file-details"><summary>文件信息与保存路径</summary><FileLocation task={previewTask}/></details>}
+      </aside>
+     </ModalBody>
+     <ModalFooter data-slot="footer" className="preview-footer">
+      <Button as="a" href={previewTask.url} target="_blank" rel="noreferrer" variant="bordered" endContent={<ExternalLink size={14}/>}>查看原文</Button>
+      {previewTask.status==='completed'&&<Button as="a" href={previewTask.kind==='dynamic'?`/api/tasks/${previewTask.id}/archive`:`/api/tasks/${previewTask.id}/files/0?download=1`} color="primary" startContent={<ArrowDownToLine size={15}/>}>{previewTask.kind==='dynamic'?'下载图文':'下载文件'}</Button>}
+     </ModalFooter>
+    </>}
+   </ModalContent>
+  </Modal>
+  <ImageViewer sources={previewImages} index={imageIndex} title={previewTask?.title||''} onIndexChange={i=>{setImageIndex(i);setPreviewImageIndex(i)}} onClose={()=>setImageIndex(null)}/>
   <Modal isOpen={!!confirmation} onClose={()=>setConfirmation(null)} size="md" classNames={{base:'app-modal'}}><ModalContent><ModalHeader>{confirmation?.title}</ModalHeader><ModalBody data-slot="body"><p className="muted">{confirmation?.description}</p></ModalBody><ModalFooter data-slot="footer"><Button variant="light" onPress={()=>setConfirmation(null)}>取消</Button><Button color="danger" isLoading={confirmBusy} onPress={async()=>{if(!confirmation)return;setConfirmBusy(true);if(await confirmation.action())setConfirmation(null);setConfirmBusy(false)}}>确认移除</Button></ModalFooter></ModalContent></Modal>
   {toast&&<div role={toast.error?'alert':'status'} className={`toast ${toast.error?'toast-error':''}`}>{toast.error?<TriangleAlert size={19}/>:<Check size={19}/>}<span>{toast.message}</span><button aria-label="关闭通知" onClick={()=>setToast(null)}><X size={15}/></button></div>}
  </AppContext.Provider>

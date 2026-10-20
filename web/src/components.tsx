@@ -32,6 +32,7 @@ export function duration(seconds:number){return `${Math.floor(seconds/60)}:${Str
 export function bytes(n:number){if(!Number.isFinite(n)||n<=0)return '0 B';const units=['B','KB','MB','GB','TB','PB'];const unit=Math.max(0,Math.min(Math.floor(Math.log(n)/Math.log(1024)),units.length-1));return `${(n/1024**unit).toFixed(unit===0&&n<1?1:unit<2?0:unit===2?1:2)} ${units[unit]}`}
 export function relative(date:string|null){if(!date)return '尚未检查';const min=Math.max(0,Math.floor((Date.now()-new Date(date).getTime())/60000));if(min<1)return '刚刚';if(min<60)return `${min} 分钟前`;if(min<1440)return `${Math.floor(min/60)} 小时前`;return `${Math.floor(min/1440)} 天前`}
 export function dateTime(date:string){return new Date(date).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false})}
+export function scheduleTime(date:string){const value=new Date(date);return value.toDateString()===new Date().toDateString()?value.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false}):dateTime(date)}
 export function quality(q:string){return q==='best'?'最佳画质':q==='2160'?'4K':`${q}P`}
 export function External({url}:{url:string}){return <a href={url} target="_blank" rel="noreferrer" className="external" aria-label="打开原文" title="打开原文"><ArrowUpRight size={16}/></a>}
 export {Check,MoreHorizontal,RefreshCw};
