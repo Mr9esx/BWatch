@@ -18,15 +18,28 @@
 
 ## 可行性结论
 
+### 官方接口与平台规则
+
+小红书开放平台现在提供 OAuth 2.0 与 Web 扫码授权，但官方 Scope 页面注明目前只开放 `basic_info`；`read_notes`（读取用户发布的笔记内容）仍为“规划中”。官方设备授权文档的扫码流程只换取 access/refresh token 和已配置 scope，不会发放小红书网站登录 Cookie。因此，**官方扫码授权目前不能完成博主笔记发现与归档**。[官方 Scope 列表](https://openaccount.xiaohongshu.com/docs/scope) [官方 Web 扫码及设备 Token API](https://openaccount.xiaohongshu.com/docs/api-reference)
+
+开放平台应用还需要注册并审核。服务市场管理规范载明，在相关数据接口权限未开放时，服务商通过爬虫收集小红书平台数据可能导致服务隐藏、下架、冻结或清退；开发者协议另要求不得从用户处取得小红书账户认证凭据或代用户自动登录。上述规则面向开放平台开发者/服务商，是否直接适用于只在本机运行的个人工具需要平台确认；但不能将非官方网页登录采集描述为官方认可或无风险。[官方开放平台 Scope](https://openaccount.xiaohongshu.com/docs/scope) [服务市场管理规范文本](https://s.apifox.cn/apidoc/docs-site/1103512/doc-2811123) [开发者协议文本](https://xiaohongshu.apifox.cn/doc-2811022)
+
+因此必须区分两条路线：
+
+1. **官方路线**：接入官方 Web 扫码 OAuth；目前只能提供账号识别/基础资料，等待 `read_notes` scope 开放或取得小红书书面授权后，才实现笔记归档。
+2. **非官方本机路线**：使用网页登录会话/未公开接口完成笔记列表及媒体访问。公开代码展示了 QR 登录和用户笔记操作的实现，说明技术上可尝试；但接口会变、可能触发验证码/限流或账号/IP 限制，且受上述平台规则约束。当前没有可靠依据给出成功率或账号安全保证。[非官方 QR/API 客户端示例](https://github.com/ReaJason/xhs/blob/master/xhs/core.py) [第三方客户端报告的验证码/IP 限制](https://github.com/jackwener/xiaohongshu-cli)
+
+本设计的 XHS 采集实现依赖用户明确选择第二条路线；如选择第一条，则 XHS 只实现官方 OAuth 登录，不开启笔记抓取，直到平台开放权限。实现不得绕过验证码或反爬措施，遇到限制应停止并提示。
+
 ### 小红书登录
 
-小红书应用内扫码登录可行，但当前未发现面向个人博主笔记归档的官方开放 API。官方开放平台文档定位于电商应用能力；小红书创作服务平台提供网页登录。GitHub 上的非官方客户端已实现小红书二维码创建和状态轮询，说明网页会话登录可落地，但这些协议并非稳定公开 API，必须视为易变的适配器实现。[小红书开放平台开发说明](https://open.xiaohongshu.com/document/developer/file/33) [非官方客户端中的二维码登录实现](https://github.com/ReaJason/xhs/blob/master/xhs/core.py)
-
-建议由 Go 后端向前端提供扫码会话：申请二维码、返回二维码内容和有效期、轮询登录状态、成功后将 Cookie/会话保存在本机数据目录。平台登录状态和凭据分开存储。过期时报告需要重新登录，不退回匿名扫描。
+官方 OAuth Web 扫码流程是可用的正式登录方式，但该 token 当前没有笔记读取权限。若用户选择非官方路线，才考虑由 Go 后端提供网页 Cookie 扫码会话；该流程不可复用官方 OAuth token 代替。无论路线如何，会话都按平台分开保存；过期时报告需要重新登录，不退回匿名扫描。
 
 ### 笔记发现与 yt-dlp 边界
 
 yt-dlp 当前包含 B 站及小红书单条笔记提取器。小红书提取器的 URL 匹配仅针对 `/explore/<id>` 和 `/discovery/item/<id>`，提取视频流和笔记图片 URL；这些图片以 `thumbnails` 字段返回，而非作为图文帖的媒体文件列表。当前没有博主主页笔记列表提取器。因此 yt-dlp 不足以承担小红书订阅发现，也不能直接作为图文原图存档方案。[yt-dlp 支持站点列表](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md) [小红书提取器源码](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/xiaohongshu.py)
+
+当前工作区未安装 yt-dlp 可执行文件，因此本次调研核对了上游源码、官方文档和故障报告，没有用本机或真实账号执行媒体下载烟雾测试。
 
 近期 yt-dlp 问题记录过小红书视频笔记无法提取元数据或视频格式的情况，说明即使单条视频提取器存在，成功率仍受平台网页和风控变化影响。[无法提取视频格式的问题](https://github.com/yt-dlp/yt-dlp/issues/12719) [提取器故障报告](https://github.com/yt-dlp/yt-dlp/issues/15467)
 
@@ -108,6 +121,8 @@ B 站视频仍由 yt-dlp 下载；B 站空间扫描、动态解析和图文图�
 
 | 风险 | 影响 | 缓解 |
 | --- | --- | --- |
+| 官方 `read_notes` scope 尚未开放 | 纯官方 OAuth 路线暂时无法读取博主笔记 | 等待 scope 开放或取得平台书面授权；未获授权前不启用官方笔记采集 |
+| 非官方网页登录采集的政策与账号风险 | 扫码 Cookie/未公开接口可能违反平台规则，或导致验证码、账号/IP 限制 | 在选择该路线前明确本地使用边界；不绕过验证码；限制频率；遇到平台限制立即停止 |
 | 小红书网页 API/签名变化 | 登录、扫描或媒体 URL 解析可能中断 | 将协议隔离在 XHS 适配器；保存脱敏样本；错误可见；限制请求频率 |
 | 小红书验证码或 IP 风控 | 自动扫描暂停 | 识别风控状态并退避，不循环重试；提示用户在登录流程/平台客户端完成验证 |
 | yt-dlp 小红书提取器变化 | 个别视频任务无法下载 | 固定 yt-dlp 可配置版本；解析失败提供重试；XHS 视频下载器边界可替换 |
@@ -117,6 +132,9 @@ B 站视频仍由 yt-dlp 下载；B 站空间扫描、动态解析和图文图�
 ## 参考资料
 
 - [小红书开放平台开发说明](https://open.xiaohongshu.com/document/developer/file/33)
+- [小红书官方 Scope 列表](https://openaccount.xiaohongshu.com/docs/scope)
+- [小红书官方 OAuth/Web 扫码 API 参考](https://openaccount.xiaohongshu.com/docs/api-reference)
+- [小红书服务市场管理规范文本](https://s.apifox.cn/apidoc/docs-site/1103512/doc-2811123)
 - [yt-dlp 支持站点列表](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md)
 - [yt-dlp 小红书提取器](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/xiaohongshu.py)
 - [yt-dlp 小红书提取失败报告 #12719](https://github.com/yt-dlp/yt-dlp/issues/12719)
