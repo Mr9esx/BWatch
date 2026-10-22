@@ -4,7 +4,7 @@ import "maps"
 
 func contentEntries(videos, dynamics []Entry) map[string]bool {
 	entries := map[string]bool{}
-	for kind, items := range map[string][]Entry{"video": videos, "dynamic": dynamics} {
+	for kind, items := range map[string][]Entry{"video": videos, "image_post": dynamics} {
 		for _, entry := range items {
 			if entry.ID != "" {
 				entries[kind+":"+entry.ID] = true

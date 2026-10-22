@@ -22,6 +22,10 @@ const userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/5
 func imageHost(host string) bool {
 	return strings.HasSuffix(host, ".hdslb.com") || strings.HasSuffix(host, ".biliimg.com")
 }
+func xhsImageHost(host string) bool {
+	host = strings.ToLower(host)
+	return strings.HasSuffix(host, ".xhscdn.com")
+}
 func bilibiliAvatarURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || !imageHost(u.Hostname()) || u.User != nil || u.Port() != "" {
@@ -39,8 +43,8 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) > 5 {
 		return errors.New("重定向过多")
 	}
-	if req.URL.Scheme != "https" || (!imageHost(req.URL.Hostname()) && req.URL.Hostname() != "api.bilibili.com") {
-		return errors.New("拒绝非 B 站图片服务的重定向")
+	if req.URL.Scheme != "https" || (!imageHost(req.URL.Hostname()) && !xhsImageHost(req.URL.Hostname()) && req.URL.Hostname() != "api.bilibili.com") {
+		return errors.New("拒绝非受信任平台资源服务的重定向")
 	}
 	return nil
 }
@@ -289,12 +293,16 @@ func cookiesForBilibili(path string) (string, error) {
 	if path == "" {
 		return "", nil
 	}
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("Cookie 文件不可读: %w", err)
 	}
-	defer f.Close()
-	scanner := bufio.NewScanner(io.LimitReader(f, 2<<20))
+	return cookiesForBilibiliData(data)
+}
+
+func cookiesForBilibiliData(data []byte) (string, error) {
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 4096), 2<<20)
 	pairs := []string{}
 	for scanner.Scan() {
 		line := strings.TrimPrefix(scanner.Text(), "#HttpOnly_")
@@ -336,11 +344,7 @@ func (a *App) fetchBilibiliPage(ctx context.Context, c Creator, settings Setting
 	}
 	u, _ := url.Parse(c.URL)
 	uid := strings.Split(strings.Trim(u.Path, "/"), "/")[0]
-	cookiePath, err := a.bilibiliCookies(ctx, settings)
-	if err != nil {
-		return out, err
-	}
-	cookie, err := cookiesForBilibili(cookiePath)
+	cookie, _, err := a.bilibiliCookieHeader(ctx, settings)
 	if err != nil {
 		return out, err
 	}
@@ -426,6 +430,13 @@ func (a *App) scanBilibili(ctx context.Context, c Creator, settings Settings) (b
 	return out, nil
 }
 func (a *App) downloadDynamic(ctx context.Context, t Task) (string, []string, int64, error) {
+	if t.Platform == PlatformXiaohongshu {
+		var err error
+		t, err = a.resolveXHSArchiveTask(ctx, t)
+		if err != nil {
+			return "", nil, 0, err
+		}
+	}
 	settings := a.Snapshot().Settings
 	client, err := a.clientFor(settings)
 	if err != nil {
@@ -452,19 +463,29 @@ func (a *App) downloadDynamic(ctx context.Context, t Task) (string, []string, in
 			raw = "https:" + raw
 		}
 		u, err := url.Parse(raw)
-		if err == nil && u.Scheme == "http" && imageHost(u.Hostname()) {
+		xhsMedia := strings.Contains(t.URL, "xiaohongshu.com/") || strings.Contains(t.URL, "xhslink.cn/")
+		trustedHost := false
+		if err == nil {
+			trustedHost = imageHost(u.Hostname()) || (xhsMedia && xhsImageHost(u.Hostname()))
+		}
+		if err == nil && u.Scheme == "http" && trustedHost {
 			u.Scheme = "https"
 			raw = u.String()
 		}
-		if err != nil || u.Scheme != "https" || !imageHost(u.Hostname()) || u.User != nil || u.Port() != "" {
-			return "", nil, 0, errors.New("图片地址不属于受信任的 B 站图片服务")
+		trustedHost = err == nil && (imageHost(u.Hostname()) || (xhsMedia && xhsImageHost(u.Hostname())))
+		if err != nil || u.Scheme != "https" || !trustedHost || u.User != nil || u.Port() != "" {
+			return "", nil, 0, errors.New("图片地址不属于受信任的平台图片服务")
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 		if err != nil {
 			return "", nil, 0, err
 		}
 		req.Header.Set("User-Agent", userAgent)
-		req.Header.Set("Referer", "https://www.bilibili.com/")
+		if xhsMedia {
+			req.Header.Set("Referer", "https://www.xiaohongshu.com/")
+		} else {
+			req.Header.Set("Referer", "https://www.bilibili.com/")
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			return "", nil, 0, err

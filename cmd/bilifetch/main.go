@@ -52,7 +52,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	server := &http.Server{Addr: env("BILIFETCH_ADDR", "127.0.0.1:8090"), Handler: a.Handler(ctx, env("BILIFETCH_WEB", "web/dist"), os.Getenv("BILIFETCH_DEV_ORIGIN")), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second}
+	server := &http.Server{Addr: env("BILIFETCH_ADDR", "127.0.0.1:8090"), Handler: a.Handler(ctx, env("BILIFETCH_WEB", "web/dist"), env("BILIFETCH_DEV_ORIGIN", "http://127.0.0.1:5173,http://localhost:5173")), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second}
 	go a.Run(ctx)
 	go func() {
 		log.Printf("BiliFetch 已启动 http://%s", server.Addr)
@@ -68,4 +68,5 @@ func main() {
 	if err := a.Drain(shutdown); err != nil {
 		log.Printf("等待任务退出: %v", err)
 	}
+	a.Close()
 }

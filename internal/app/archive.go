@@ -11,7 +11,7 @@ import (
 
 func (a *App) serveArchive(w http.ResponseWriter, r *http.Request) {
 	for _, task := range a.Snapshot().Tasks {
-		if task.ID != r.PathValue("id") || task.Kind != "dynamic" || task.Status != "completed" {
+		if task.ID != r.PathValue("id") || task.Kind != "image_post" || task.Status != "completed" {
 			continue
 		}
 		paths := append([]string{task.File}, task.Files...)

@@ -1,0 +1,12 @@
+xhs-reader @ git+https://github.com/hammershock/xhs-cli.git@14d7970a3ca580d823ccd940549f107ccc260f17
+click==8.5.0
+httpx==0.28.1
+xhshow==0.2.0
+yt-dlp==2026.8.19
+playwright==1.63.0
+curl_cffi==0.16.3
+PyExecJS==1.5.1
+loguru>=0.7
+python-dotenv>=1.0
+retry==0.9.2
+requests>=2.32

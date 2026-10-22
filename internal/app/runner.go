@@ -50,43 +50,53 @@ func (a *App) ScanCreator(ctx context.Context, creatorID string) error {
 		a.mu.Unlock()
 		return errors.New("请先启用订阅")
 	}
-	if creator.Platform == "bilibili" && future(a.state.BilibiliBlockedUntil, time.Now()) {
+	if future(a.platformBlockedUntilLocked(creator.Platform), time.Now()) {
 		a.mu.Unlock()
-		return errors.New("B 站正在冷却，请等待恢复")
+		return fmt.Errorf("%s正在冷却，请等待恢复", contentPlatformLabel(creator.Platform))
 	}
 	a.checking[creatorID] = true
 	settings := a.state.Settings
 	a.mu.Unlock()
 	defer func() { a.mu.Lock(); delete(a.checking, creatorID); a.mu.Unlock() }()
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	timeout := 3 * time.Minute
+	if creator.Platform == PlatformXiaohongshu {
+		timeout = 10 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	failures := []string{}
-	if creator.Platform == "bilibili" {
-		feed, err := a.scanBilibili(ctx, *creator, settings)
-		if err != nil {
-			failures = append(failures, "B 站内容: "+err.Error())
+	provider, ok := a.platforms.byPlatform(PlatformID(creator.Platform))
+	if !ok {
+		failures = append(failures, "不支持的平台: "+string(creator.Platform))
+	} else {
+		feed, scanErr := provider.Scan(ctx, a, *creator, settings)
+		if scanErr != nil {
+			failures = append(failures, contentPlatformLabel(PlatformID(creator.Platform))+"内容: "+scanErr.Error())
 		} else {
-			if err := a.recordContentCatalog(creatorID, feed); err != nil {
+			videos, imagePosts := []Entry{}, []Entry{}
+			catalog := map[string]bool{}
+			for _, entry := range feed.Entries {
+				if entry.Kind == ContentVideo {
+					catalog[string(ContentVideo)+":"+entry.ID] = true
+					videos = append(videos, entry)
+				} else if entry.Kind == ContentImagePost {
+					catalog[string(ContentImagePost)+":"+entry.ID] = true
+					imagePosts = append(imagePosts, entry)
+				}
+			}
+			if err := a.recordPlatformCatalog(creatorID, catalog, feed.Complete); err != nil {
 				return err
 			}
 			if creator.WatchVideos {
-				if err := a.applyScan(creatorID, feed.Videos, feed.Name, "video", feed.Avatar); err != nil {
+				if err := a.applyScan(creatorID, videos, feed.Name, ContentVideo, feed.Avatar); err != nil {
 					failures = append(failures, "视频: "+err.Error())
 				}
 			}
 			if creator.WatchDynamics {
-				if err := a.applyScan(creatorID, feed.Dynamics, feed.Name, "dynamic", feed.Avatar); err != nil {
-					failures = append(failures, "动态: "+err.Error())
+				if err := a.applyScan(creatorID, imagePosts, feed.Name, ContentImagePost, feed.Avatar); err != nil {
+					failures = append(failures, "图文: "+err.Error())
 				}
 			}
-		}
-	} else if creator.WatchVideos {
-		entries, name, err := a.scanVideos(ctx, *creator, settings)
-		if err == nil {
-			err = a.ApplyScan(creatorID, entries, name)
-		}
-		if err != nil {
-			failures = append(failures, "视频: "+err.Error())
 		}
 	}
 	scanErr := strings.Join(failures, "；")
@@ -104,9 +114,38 @@ func (a *App) ScanCreator(ctx context.Context, creatorID string) error {
 	}
 	return nil
 }
+
+func contentPlatformLabel(platform PlatformID) string {
+	if platform == PlatformXiaohongshu {
+		return "小红书"
+	}
+	return "B 站"
+}
+
+func (a *App) recordPlatformCatalog(creatorID string, entries map[string]bool, complete bool) error {
+	return a.transaction(func() error {
+		for i := range a.state.Creators {
+			c := &a.state.Creators[i]
+			if c.ID != creatorID || !c.Enabled {
+				continue
+			}
+			if h := c.HistoryJob; h != nil && h.CatalogFromStart && (h.Status == "running" || h.Status == "paused" || h.Status == "failed") {
+				mergeCatalog(&h.CatalogEntries, entries)
+			}
+			if complete {
+				c.ContentCatalog = entries
+				c.ContentCatalogComplete = true
+			} else {
+				mergeCatalog(&c.ContentCatalog, entries)
+			}
+			return nil
+		}
+		return errors.New("订阅不存在")
+	})
+}
 func (a *App) scanVideos(ctx context.Context, c Creator, s Settings) ([]Entry, string, error) {
 	args := []string{"--ignore-config", "--flat-playlist", "--dump-single-json", "--playlist-end", "50", "--socket-timeout", "20", "--retries", "1", "--no-warnings"}
-	options, cleanup, err := a.downloadOptions(ctx, c.Platform == "bilibili", s)
+	options, cleanup, err := a.downloadOptions(ctx, PlatformID(c.Platform), s)
 	if err != nil {
 		return nil, "", err
 	}
@@ -150,9 +189,6 @@ func (a *App) scanVideos(ctx context.Context, c Creator, s Settings) ([]Entry, s
 			continue
 		}
 		videoURL := "https://www.bilibili.com/video/" + e.ID
-		if c.Platform == "youtube" {
-			videoURL = "https://www.youtube.com/watch?v=" + e.ID
-		}
 		thumbnail := e.Thumbnail
 		if thumbnail == "" && len(e.Thumbnails) > 0 {
 			thumbnail = e.Thumbnails[0].URL
@@ -170,9 +206,20 @@ func commandError(err error, stderr string) string {
 	if message == "" {
 		message = err.Error()
 	}
+	message = sanitizeCookieFailure(message)
 	runes := []rune(message)
 	if len(runes) > 600 {
 		message = string(runes[len(runes)-600:])
+	}
+	return message
+}
+
+// CookieJar includes the offending Cookie line in its traceback. Never save
+// that line in task errors or events, since it may contain login credentials.
+func sanitizeCookieFailure(message string) string {
+	lower := strings.ToLower(message)
+	if strings.Contains(lower, "invalid netscape format cookies file") || strings.Contains(lower, "cookieloaderror") {
+		return "下载器无法读取 Cookie 文件，请重试下载；若仍失败，请重新扫码登录"
 	}
 	return message
 }
@@ -199,7 +246,14 @@ func (a *App) downloadVideo(ctx context.Context, t Task, s Settings) (string, []
 	}
 	format := "bv*+ba/b"
 	args := []string{"--ignore-config", "--no-playlist", "--no-simulate", "--continue", "--no-overwrites", "--newline", "--progress", "--progress-delta", "1", "--progress-template", "download:BF_PROGRESS:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress.downloaded_bytes)s", "--print", "after_move:BF_FILE:%(filepath)s", "--socket-timeout", "20", "--retries", "3", "--fragment-retries", "3", "--windows-filenames", "--trim-filenames", "180", "--write-info-json", "--merge-output-format", "mp4", "-f", format, "-P", directory, "-o", "%(title).140B [%(id)s].%(ext)s"}
-	options, cleanup, err := a.downloadOptions(ctx, strings.Contains(t.URL, "bilibili.com/"), s)
+	platform := t.Platform
+	if platform == "" {
+		platform = PlatformXiaohongshu
+		if strings.Contains(t.URL, "bilibili.com/") {
+			platform = PlatformBilibili
+		}
+	}
+	options, cleanup, err := a.downloadOptions(ctx, platform, s)
 	if err != nil {
 		return "", nil, 0, err
 	}
@@ -306,14 +360,21 @@ func (a *App) startNext(ctx context.Context) bool {
 			if t.Status != "queued" || a.running[t.ID] != nil {
 				continue
 			}
-			if isBilibiliTask(*t) {
-				now := time.Now()
-				if future(a.state.BilibiliBlockedUntil, now) || future(a.state.NextBilibiliDownloadAt, now) {
-					continue
+			now := time.Now()
+			platform := t.Platform
+			if platform == "" {
+				if isBilibiliTask(*t) {
+					platform = PlatformBilibili
+				} else {
+					platform = PlatformXiaohongshu
 				}
-				next := now.Add(jitter(time.Duration(a.state.Settings.BilibiliMinInterval)*time.Minute, time.Duration(a.state.Settings.BilibiliMaxInterval)*time.Minute))
-				a.state.NextBilibiliDownloadAt = &next
 			}
+			if future(a.state.NextDownloadAt, now) || future(a.platformBlockedUntilLocked(platform), now) {
+				continue
+			}
+			next := now.Add(jitter(time.Duration(a.state.Settings.DownloadMinInterval)*time.Minute, time.Duration(a.state.Settings.DownloadMaxInterval)*time.Minute))
+			a.state.NextDownloadAt = &next
+			a.state.NextBilibiliDownloadAt = &next
 			t.Status = "downloading"
 			t.Speed = ""
 			t.Error = ""
@@ -344,7 +405,7 @@ func (a *App) startNext(ctx context.Context) bool {
 		var files []string
 		var size int64
 		var err error
-		if task.Kind == "dynamic" {
+		if task.Kind == "image_post" {
 			file, files, size, err = a.downloadDynamic(taskCtx, task)
 		} else {
 			file, files, size, err = a.downloadVideo(taskCtx, task, settings)
@@ -362,8 +423,16 @@ func (a *App) startNext(ctx context.Context) bool {
 func (a *App) finishTask(ctx context.Context, task Task, file string, files []string, size int64, downloadErr error) {
 	for {
 		saveErr := a.transaction(func() error {
-			if downloadErr != nil && ctx.Err() == nil && isBilibiliTask(task) {
-				a.blockBilibiliLocked(downloadErr.Error(), time.Now())
+			if downloadErr != nil && ctx.Err() == nil {
+				platform := task.Platform
+				if platform == "" {
+					if isBilibiliTask(task) {
+						platform = PlatformBilibili
+					} else {
+						platform = PlatformXiaohongshu
+					}
+				}
+				a.blockPlatformLocked(platform, downloadErr.Error(), time.Now())
 			}
 			for i := range a.state.Tasks {
 				t := &a.state.Tasks[i]
@@ -445,6 +514,9 @@ func (a *App) Run(ctx context.Context) {
 		}
 		for _, c := range state.Creators {
 			if !c.Enabled || (c.NextCheckAt != nil && time.Now().Before(*c.NextCheckAt)) || (c.LastChecked != nil && time.Since(*c.LastChecked) < time.Duration(c.Interval)*time.Minute) {
+				continue
+			}
+			if future(platformCooldown(state, c.Platform), time.Now()) {
 				continue
 			}
 			a.mu.Lock()

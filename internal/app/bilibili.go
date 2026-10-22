@@ -2,17 +2,13 @@ package app
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -58,112 +54,29 @@ func (a *App) clientFor(s Settings) (*http.Client, error) {
 	return &client, nil
 }
 
-func (a *App) bilibiliCookies(ctx context.Context, s Settings) (string, error) {
-	if s.CookiesFile != "" {
-		header, err := cookiesForBilibili(s.CookiesFile)
-		if err != nil {
-			return "", err
-		}
-		if header == "" {
-			return "", errors.New("Cookie 文件中没有未过期的 B 站 Cookie")
-		}
-		return s.CookiesFile, nil
-	}
-	a.guestMu.Lock()
-	defer a.guestMu.Unlock()
-	routeHash := sha256.Sum256([]byte(proxyURL(s)))
-	path := filepath.Join(filepath.Dir(a.statePath), fmt.Sprintf("bilibili-guest-%x.cookies.txt", routeHash[:6]))
-	if info, err := os.Stat(path); err == nil && time.Since(info.ModTime()) < 24*time.Hour {
-		header, err := cookiesForBilibili(path)
-		if err == nil && strings.Contains(header, "buvid3=") {
-			return path, nil
-		}
-	}
-	client, err := a.clientFor(s)
+func (a *App) bilibiliCookieHeader(_ context.Context, _ Settings) (string, []byte, error) {
+	data, err := a.loadCredential(PlatformBilibili)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	defer client.CloseIdleConnections()
-	jar, _ := cookiejar.New(nil)
-	client.Jar = jar
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.bilibili.com/", nil)
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := client.Do(req)
+	header, err := cookiesForBilibiliData(data)
 	if err != nil {
-		return "", fmt.Errorf("初始化 B 站访客会话失败: %w", err)
+		return "", nil, err
 	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 2<<20))
-	resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("B 站主页 HTTP %d，无法初始化访客会话", resp.StatusCode)
+	if header == "" {
+		return "", nil, errors.New("登录凭据中没有未过期的 B 站 Cookie")
 	}
-	apiURL, _ := url.Parse("https://api.bilibili.com/")
-	req, _ = http.NewRequestWithContext(ctx, http.MethodGet, "https://api.bilibili.com/x/frontend/finger/spi", nil)
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Referer", "https://www.bilibili.com/")
-	resp, err = client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("初始化 B 站访客标识失败: %w", err)
-	}
-	if resp.StatusCode != 200 {
-		resp.Body.Close()
-		return "", fmt.Errorf("B 站访客接口 HTTP %d", resp.StatusCode)
-	}
-	var visitor struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Data    struct {
-			B3 string `json:"b_3"`
-			B4 string `json:"b_4"`
-		} `json:"data"`
-	}
-	decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&visitor)
-	resp.Body.Close()
-	if decodeErr != nil {
-		return "", fmt.Errorf("B 站访客响应无效: %w", decodeErr)
-	}
-	if visitor.Code != 0 {
-		return "", fmt.Errorf("B 站访客接口错误 %d: %s", visitor.Code, visitor.Message)
-	}
-	for name, value := range map[string]string{"buvid3": visitor.Data.B3, "buvid4": visitor.Data.B4} {
-		if value != "" {
-			jar.SetCookies(apiURL, []*http.Cookie{{Name: name, Value: value, Domain: ".bilibili.com", Path: "/", Secure: true}})
+	hasSession := false
+	for _, pair := range strings.Split(header, "; ") {
+		if strings.HasPrefix(pair, "SESSDATA=") && pair != "SESSDATA=" {
+			hasSession = true
+			break
 		}
 	}
-	var data strings.Builder
-	data.WriteString("# Netscape HTTP Cookie File\n# BiliFetch: server-issued anonymous visitor session; no account login.\n")
-	haveVisitor := false
-	for _, cookie := range jar.Cookies(apiURL) {
-		if cookie.Name == "buvid3" {
-			haveVisitor = true
-		}
-		if strings.ContainsAny(cookie.Name+cookie.Value, "\r\n\t") {
-			continue
-		}
-		fmt.Fprintf(&data, ".bilibili.com\tTRUE\t/\tTRUE\t%s\t%s\t%s\n", strconv.FormatInt(time.Now().Add(24*time.Hour).Unix(), 10), cookie.Name, cookie.Value)
+	if !hasSession {
+		return "", nil, errors.New("登录凭据没有有效登录态，请重新扫码登录 B 站")
 	}
-	if !haveVisitor {
-		return "", errors.New("B 站未下发访客 Cookie，请在设置中配置有效 Cookie")
-	}
-	file, err := os.CreateTemp(filepath.Dir(a.statePath), ".guest-*")
-	if err != nil {
-		return "", err
-	}
-	defer os.Remove(file.Name())
-	if err = file.Chmod(0600); err == nil {
-		_, err = file.WriteString(data.String())
-	}
-	closeErr := file.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return "", err
-	}
-	if err = os.Rename(file.Name(), path); err != nil {
-		return "", err
-	}
-	return path, nil
+	return header, data, nil
 }
 
 func (a *App) recordScanOutcome(creatorID, message string, now time.Time) error {
@@ -181,9 +94,12 @@ func (a *App) recordScanOutcome(creatorID, message string, now time.Time) error 
 				a.event("success", "「"+c.Name+"」更新检查完成")
 				return nil
 			}
+			if c.Platform == PlatformXiaohongshu && isPlatformRiskError(c.Platform, message) {
+				a.blockPlatformLocked(c.Platform, message, now)
+			}
 			c.FailureCount++
 			delay := time.Duration(c.Interval) * time.Minute
-			if isRiskError(message) {
+			if isPlatformRiskError(c.Platform, message) {
 				delay = 30 * time.Minute
 				for n := 1; n < c.FailureCount && delay < 6*time.Hour; n++ {
 					delay *= 2
@@ -209,21 +125,41 @@ func isRiskError(message string) bool {
 	return false
 }
 
-// A private copy prevents concurrent yt-dlp processes from rewriting the shared
-// login/visitor cookie jar or modifying the user's exported credentials.
-func (a *App) downloadOptions(ctx context.Context, bilibili bool, s Settings) ([]string, func(), error) {
+// yt-dlp accepts a Netscape cookie file, so write a short-lived private copy
+// from the encrypted credential and remove it when the process ends.
+func (a *App) downloadOptions(ctx context.Context, platform PlatformID, s Settings) ([]string, func(), error) {
 	if err := validateProxy(proxyURL(s)); err != nil {
 		return nil, func() {}, err
 	}
 	args := []string{"--proxy", proxyURL(s)}
-	source := s.CookiesFile
-	if bilibili {
-		var err error
-		source, err = a.bilibiliCookies(ctx, s)
+	source := ""
+	if platform == PlatformBilibili {
+		_, data, err := a.bilibiliCookieHeader(ctx, s)
 		if err != nil {
 			return nil, func() {}, err
 		}
-		args = append(args, "--user-agent", userAgent)
+		temp, cleanup, err := a.writeTemporaryCookieFile(data)
+		if err != nil {
+			return nil, func() {}, err
+		}
+		return append(args, "--user-agent", userAgent, "--cookies", temp), cleanup, nil
+	}
+	if platform == PlatformXiaohongshu {
+		data, err := a.loadCredential(PlatformXiaohongshu)
+		if err != nil {
+			data, err = a.xhsBrowser.cookieFile(ctx)
+			if err != nil {
+				return nil, func() {}, err
+			}
+			if saveErr := a.saveCredential(PlatformXiaohongshu, data); saveErr != nil {
+				return nil, func() {}, saveErr
+			}
+		}
+		temp, cleanup, err := a.writeTemporaryCookieFile(data)
+		if err != nil {
+			return nil, func() {}, err
+		}
+		return append(args, "--user-agent", userAgent, "--cookies", temp), cleanup, nil
 	}
 	if source == "" {
 		return args, func() {}, nil

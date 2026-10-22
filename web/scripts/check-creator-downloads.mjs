@@ -11,9 +11,9 @@ const output=join(root,'node_modules/.cache/creator-downloads/check.mjs');
 await mkdir(dirname(output),{recursive:true});
 await build({stdin:{contents:"export {Creators,Library} from './src/ContentPages';export {LibraryItem,getLibraryGroups,selectLibraryTasks} from './src/Library';export {default as Dashboard} from './src/Dashboard';export {ResourceStats} from './src/ResourceMonitor';export {AppContext} from './src/context';export {emptyState} from './src/types';export {getCreatorTasks} from './src/CreatorDownloads';export {Thumbnail,bytes} from './src/components';export {request} from './src/api';",resolveDir:root},outfile:output,bundle:true,platform:'node',format:'esm',packages:'external',jsx:'automatic',logLevel:'error'});
 const {Creators,Library,LibraryItem,getLibraryGroups,selectLibraryTasks,Dashboard,ResourceStats,AppContext,emptyState,getCreatorTasks,Thumbnail,bytes,request}=await import(pathToFileURL(output));
-const creator={id:'one',name:'测试 UP',url:'https://space.bilibili.com/123/video',platform:'bilibili',interval:30,quality:'best',watchVideos:true,watchDynamics:true,enabled:true,createdAt:'2026-10-18T00:00:00Z',lastChecked:null,lastError:'',seen:{},seenDynamics:{}};
-const task=(id,status,creatorId='one')=>({id,creatorId,creatorName:'测试 UP',videoId:id,kind:'video',title:id,url:'https://www.bilibili.com/video/'+id,thumbnail:'',duration:0,quality:'best',status,progress:37.5,speed:'1.5 MiB/s',eta:'00:30',error:'',file:'',bytes:0,createdAt:'2026-10-18T00:00:00Z',finishedAt:null});
-for(const kind of ['video','dynamic']){
+const creator={id:'one',name:'测试 UP',url:'https://space.bilibili.com/123/video',platform:'bilibili',interval:30,quality:'best',history:false,initialized:true,dynamicInitialized:true,watchVideos:true,watchDynamics:true,enabled:true,createdAt:'2026-10-18T00:00:00Z',lastChecked:null,lastError:'',seen:{},seenDynamics:{}};
+const task=(id,status,creatorId='one')=>({id,platform:'bilibili',creatorId,creatorName:'测试 UP',videoId:id,kind:'video',title:id,url:'https://www.bilibili.com/video/'+id,thumbnail:'',duration:0,quality:'best',status,progress:37.5,speed:'1.5 MiB/s',eta:'00:30',error:'',file:'',bytes:0,createdAt:'2026-10-18T00:00:00Z',finishedAt:null});
+for(const kind of ['video','image_post']){
  const completed=renderToStaticMarkup(React.createElement(Thumbnail,{task:{...task('local-cover','completed'),kind,thumbnail:'https://example.invalid/remote.jpg'}}));
  assert.match(completed,/src="\/api\/tasks\/local-cover\/thumbnail"/,'已完成的视频与图文都应使用本地封面接口');
  assert.doesNotMatch(completed,/example\.invalid/,'已归档封面不能再向远端请求图片');
@@ -22,16 +22,16 @@ assert.match(renderToStaticMarkup(React.createElement(Thumbnail,{task:{...task('
 assert.match(renderToStaticMarkup(React.createElement(Thumbnail,{task:task('no-remote','completed')})),/src="\/api\/tasks\/no-remote\/thumbnail"/,'即使没有远端缩略图地址也应尝试已下载封面');
 function render(tasks,extra={},Component=Creators){
  const state={...emptyState,creators:[creator],tasks,...extra};
- const model={state,health:null,search:'',setSearch(){},page:'creators',navigate(){},openAdd(){},act:async()=>true,preview(){},notify(){},confirm(){}};
+ const model={state,health:null,search:'',setSearch(){},page:'creators',libraryScope:{creatorId:null,platform:'all'},navigate(){},openAdd(){},act:async()=>true,preview(){},notify(){},confirm(){}};
  return renderToStaticMarkup(React.createElement(AppContext.Provider,{value:model},React.createElement(Component)));
 }
 const localTask={...task('本地视频','completed'),file:'/server/downloads/测试 UP/很长的文件名.mp4'};
 const library=render([localTask],{},Library);
 const libraryItem=render([localTask],{},()=>React.createElement(LibraryItem,{task:localTask}));
-assert.match(library,/UP 主归档/,'内容库应通过左侧 UP 列表组织归档');
+assert.match(library,/href="#library\?creator=one"/,'内容库根目录应通过创作者文件夹进入归档');
 assert.match(libraryItem,/\/server\/downloads\/测试 UP\/很长的文件名.mp4/,'内容库应直接展示实际服务器文件路径');
 assert.match(libraryItem,/复制保存路径/,'保存路径应有明确复制入口');
-const libraryTasks=[{...task('older','completed'),finishedAt:'2026-10-17T00:00:00Z',bytes:100},{...task('newer','completed'),finishedAt:'2026-10-18T00:00:00Z',bytes:50,kind:'dynamic',content:'正文关键词'},{...task('orphan','completed','removed'),creatorName:'已移除的 UP',file:'/server/orphan.mp4',bytes:300},task('still-running','downloading')];
+const libraryTasks=[{...task('older','completed'),finishedAt:'2026-10-17T00:00:00Z',bytes:100},{...task('newer','completed'),finishedAt:'2026-10-18T00:00:00Z',bytes:50,kind:'image_post',content:'正文关键词'},{...task('orphan','completed','removed'),creatorName:'已移除的 UP',file:'/server/orphan.mp4',bytes:300},task('still-running','downloading')];
 const grouped=getLibraryGroups(libraryTasks,[creator]);
 assert.deepEqual(getLibraryGroups(libraryTasks,[creator],'size').map(group=>group.id),['removed','one'],'分类的占用排序应按该 UP 主归档总大小排序');
 const groupHistory=[{...task('first','completed'),finishedAt:'2026-10-01T00:00:00Z'},{...task('latest','completed'),finishedAt:'2026-10-20T00:00:00Z'},{...task('middle','completed','removed'),finishedAt:'2026-10-10T00:00:00Z'}];
@@ -39,14 +39,14 @@ assert.deepEqual(getLibraryGroups(groupHistory,[creator],'old').map(group=>group
 assert.equal(grouped.length,2,'已移除订阅的归档也必须按作者保留，未完成任务不进入内容库');
 const ownGroup=grouped.find(group=>group.id==='one');
 assert.deepEqual([ownGroup.videos,ownGroup.dynamics,ownGroup.size,ownGroup.latest.id],[1,1,150,'newer'],'UP 分类须按实际归档统计类型、大小及最近内容');
-assert.deepEqual(selectLibraryTasks(libraryTasks,{creatorId:'one',kind:'dynamic'}).map(item=>item.id),['newer'],'UP 与类型筛选必须同时生效');
+assert.deepEqual(selectLibraryTasks(libraryTasks,{creatorId:'one',kind:'image_post'}).map(item=>item.id),['newer'],'UP 与类型筛选必须同时生效');
 assert.deepEqual(selectLibraryTasks(libraryTasks,{query:'  ORPHAN.MP4  '}).map(item=>item.id),['orphan'],'应继续支持忽略大小写和前后空格的路径搜索');
 assert.deepEqual(selectLibraryTasks(libraryTasks,{query:'新备注'},[{...creator,name:'新备注'}]).map(item=>item.id),['newer','older'],'修改后的 UP 名称也应命中历史归档');
 assert.deepEqual(selectLibraryTasks(libraryTasks,{query:'正文关键词'}).map(item=>item.id),['newer'],'图文正文应支持搜索');
 assert.deepEqual(selectLibraryTasks(libraryTasks,{creatorId:'one',sort:'old'}).map(item=>item.id),['older','newer'],'最早归档应使用完成时间排序');
 assert.deepEqual(selectLibraryTasks(libraryTasks,{sort:'size'}).map(item=>item.id),['orphan','older','newer'],'按空间排序应使用实际文件大小');
 assert.equal(libraryTasks[0].id,'older','分类与排序不能更改全局任务顺序');
-assert.match(library,/查看 测试 UP 的归档/,'UP 列表应提供可访问的归档切换入口');
+assert.match(library,/打开 测试 UP 的归档文件夹/,'UP 列表应提供可访问的归档切换入口');
 const dashboard=render([],{},Dashboard);
 for(const label of ['服务器资源','CPU 使用率','内存占用','网络速率','磁盘占用'])assert.ok(dashboard.includes(label),'工作台缺少资源指标：'+label);
 assert.equal(bytes(1024**4),'1.00 TB','磁盘容量应支持 TB 单位');
@@ -101,13 +101,13 @@ assert.equal((historyDownloading.match(/\bcreator-activity-panel\b/g)||[]).lengt
 assert.match(historyDownloading,/aria-valuenow="37.5"/,'历史拉取期间仍须保留下载进度');
 assert.match(historyDownloading,/暂停拉取/,'下载期间仍须能暂停历史拉取');
 assert.match(historyDownloading,/查看当前视频下载/,'固定高度状态区应提供完整当前任务的详情入口');
-const historyQueued=render([task('等待视频','queued'),{...task('等待图文','queued'),kind:'dynamic'}],{creators:[{...creator,historyJob:{...historyJob,pages:3,videos:2,dynamics:4,limit:50}}]});
+const historyQueued=render([task('等待视频','queued'),{...task('等待图文','queued'),kind:'image_post'}],{creators:[{...creator,historyJob:{...historyJob,pages:3,videos:2,dynamics:4,limit:50}}]});
 for(const label of ['下一条视频','等待视频','即将开始下载','暂停拉取','取消拉取'])assert.ok(historyQueued.includes(label),'等待下载时应展示下一条内容、开始提示与历史操作：'+label);
 for(const markup of [historyQueued,historyDownloading]){
  assert.equal((markup.match(/\bcreator-activity-header\b/g)||[]).length,1,'各状态应共用一个状态与操作行');
  assert.equal((markup.match(/\bcreator-activity-details\b/g)||[]).length,1,'各状态应共用一个时间或进度详情行');
 }
-const queuedWithoutHistory=render([task('普通视频','queued'),{...task('普通图文','queued'),kind:'dynamic'}]);
+const queuedWithoutHistory=render([task('普通视频','queued'),{...task('普通图文','queued'),kind:'image_post'}]);
 for(const label of ['下一条视频','普通视频','即将开始下载'])assert.ok(queuedWithoutHistory.includes(label),'普通排队状态应展示下一条内容与开始提示：'+label);
 assert.match(render([],{creators:[{...creator,historyJob:{...historyJob,status:'completed'}}]}),/暂无待处理下载/,'历史拉取完成且没有待处理任务时应恢复空闲提示');
 const scheduled={...creator,lastChecked:'2099-10-19T00:00:00Z',nextCheckAt:'2099-10-19T00:10:00Z'};
@@ -116,16 +116,16 @@ assert.match(render([],{creators:[{...scheduled,nextCheckAt:'2099-10-19T01:00:00
 assert.match(render([],{creators:[{...scheduled,enabled:false}]}),/监听已暂停/,'暂停订阅不能承诺未来自动检查');
 assert.match(render([],{creators:[scheduled],paused:true}),/调度已暂停/,'全局暂停时不能承诺未来自动检查');
 assert.ok(render([],{creators:[scheduled],bilibiliBlockedUntil:'2099-10-19T01:00:00Z'}).includes('dateTime="2099-10-19T01:00:00.000Z"'),'B 站冷却应计入预计检查时间，避免显示比实际可检查时间更早的时间');
-assert.ok(render([],{creators:[{...scheduled,platform:'youtube'}],bilibiliBlockedUntil:'2099-10-19T01:00:00Z'}).includes('dateTime="2099-10-19T00:30:00.000Z"'),'B 站冷却不能影响其他平台订阅的预计检查时间');
-const totals=render([task('video1','queued'),task('video1','failed'),{...task('draw1','completed'),kind:'dynamic'},task('other','completed','other')],{creators:[{...creator,seen:{baseline:true},seenDynamics:{baseline:true},contentCatalog:{'video:video1':true,'video:video2':true,'dynamic:draw1':true,'dynamic:draw2':true},contentCatalogComplete:true}]});
+assert.ok(render([],{creators:[{...scheduled,platform:'xiaohongshu'}],bilibiliBlockedUntil:'2099-10-19T01:00:00Z'}).includes('dateTime="2099-10-19T00:30:00.000Z"'),'B 站冷却不能影响其他平台订阅的预计检查时间');
+const totals=render([task('video1','queued'),task('video1','failed'),{...task('draw1','completed'),kind:'image_post'},task('other','completed','other')],{creators:[{...creator,seen:{baseline:true},seenDynamics:{baseline:true},contentCatalog:{'video:video1':true,'video:video2':true,'image_post:draw1':true,'image_post:draw2':true},contentCatalogComplete:true}]});
 assert.match(totals,/aria-label="视频：全部 2，已拉取 1"/,'完整总量应分别统计视频，已拉取按内容去重并隔离 UP');
 assert.match(totals,/aria-label="图文：全部 2，已拉取 1"/,'图文必须单独统计');
 assert.match(render([],{creators:[{...creator,seen:{baseline:true},seenDynamics:{}}]}),/aria-label="视频：全部至少 1，已拉取 0"/,'首次监听基线不能算已拉取，未扫完不能伪称完整总量');
 assert.match(render([],{creators:[{...creator,contentCatalog:{},contentCatalogComplete:true}]}),/aria-label="图文：全部 0，已拉取 0"/,'确实没有内容时应显示零');
 const remote=render([],{creators:[{...creator,seen:{old:true},contentTotals:{videos:393,dynamics:44}}]});
 assert.match(remote,/aria-label="视频：全部 393，已拉取 0"/,'平台视频总量应优先于已扫描数量，无需历史扫描');
-assert.match(remote,/aria-label="图文：作品总量 44，动态已拉取 0（含转发）"/,'平台 Opus 作品数与含转发的已拉取动态必须明确区分');
-assert.match(render([{...task('转发','completed'),kind:'dynamic'}],{creators:[{...creator,contentTotals:{videos:0,dynamics:0}}]}),/aria-label="图文：作品总量 0，动态已拉取 1（含转发）"/,'不能将全部动态任务混称为已拉取的 Opus 作品');
+assert.match(remote,/aria-label="图文：作品总量 44，已拉取 0（含转发）"/,'平台 Opus 作品数与含转发的已拉取动态必须明确区分');
+assert.match(render([{...task('转发','completed'),kind:'image_post'}],{creators:[{...creator,contentTotals:{videos:0,dynamics:0}}]}),/aria-label="图文：作品总量 0，已拉取 1（含转发）"/,'不能将全部动态任务混称为已拉取的 Opus 作品');
 assert.match(render([],{creators:[{...creator,contentTotals:{videos:0}}]}),/aria-label="视频：全部 0，已拉取 0"/,'远端零值不能当成缺失');
 assert.match(render([],{creators:[{...creator,seenDynamics:{old:true},contentTotals:{videos:12}}]}),/aria-label="图文：全部至少 1，已拉取 0"/,'平台缺少某种总量时，该类型独立回退，不能伪造零');
 const longError='下载失败：ERROR: HTTP Error 412: Precondition Failed。请检查登录状态与网络设置，完整错误末尾不能丢失。';

@@ -1,0 +1,5 @@
+curl_cffi==0.15.0
+requests>=2.32,<3
+loguru>=0.7,<0.8
+python-dotenv>=1,<2
+PyExecJS==1.5.1

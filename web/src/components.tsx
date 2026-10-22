@@ -1,8 +1,16 @@
-import {Button,Tooltip} from '@heroui/react';
-import {ArrowUpRight,Check,Copy,FileText,Film,Inbox,MoreHorizontal,Play,RefreshCw,Search,TriangleAlert,X} from 'lucide-react';
+import {Button,Chip,Tooltip} from '@heroui/react';
+import {ArrowUpRight,Check,Copy,FileText,Film,Grid2X2,Inbox,List,Maximize2,MoreHorizontal,Play,RefreshCw,Search,TriangleAlert,X} from 'lucide-react';
 import {useEffect,useRef,useState,type ReactNode} from 'react';
 import {useApp} from './context';
 import type {Creator,Task} from './types';
+import {platforms,platformLabel,type Platform,type PlatformFilter} from './platforms';
+
+export function CountBadge({count,label}:{count:number;label?:string}){return <Chip as="span" size="sm" radius="sm" variant="bordered" aria-label={label} classNames={{base:'count-badge',content:'count-badge-value'}}>{count}</Chip>}
+export function FilterButton({children,count,selected,onPress}:{children:ReactNode;count:number;selected:boolean;onPress:()=>void}){return <Button type="button" size="sm" variant="light" aria-pressed={selected} className={selected?'active':''} endContent={<CountBadge count={count}/>} onPress={onPress}>{children}</Button>}
+export function ViewSwitch({value,onChange,label}:{value:'grid'|'list';onChange:(value:'grid'|'list')=>void;label:string}){return <div className="view-switch" role="group" aria-label={`${label}显示方式`}><Button type="button" isIconOnly size="sm" variant="light" aria-label={`${label}卡片视图`} aria-pressed={value==='grid'} className={value==='grid'?'active':''} onPress={()=>onChange('grid')}><Grid2X2 size={16}/></Button><Button type="button" isIconOnly size="sm" variant="light" aria-label={`${label}列表视图`} aria-pressed={value==='list'} className={value==='list'?'active':''} onPress={()=>onChange('list')}><List size={16}/></Button></div>}
+export function TaskOrigin({history=false}:{history?:boolean}){return <Chip as="span" size="sm" radius="sm" variant="flat" classNames={{base:'ui-tag task-origin',content:'ui-tag-value'}}>{history?'历史':'订阅'}</Chip>}
+export function PlatformBadge({platform}:{platform?:Platform}){return <Chip as="span" size="sm" radius="sm" variant="flat" classNames={{base:`ui-tag platform-badge ${platform||'unknown'}`,content:'ui-tag-value'}}>{platformLabel(platform)}</Chip>}
+export function PlatformSelect({value,onChange,label='筛选内容平台',id}:{value:PlatformFilter;onChange:(platform:PlatformFilter)=>void;label?:string;id?:string}){return <select id={id} className="filter-select platform-select" aria-label={label} value={value} onChange={event=>onChange(event.target.value as PlatformFilter)}><option value="all">全部平台</option>{platforms.map(platform=><option key={platform.id} value={platform.id}>{platform.label}</option>)}</select>}
 
 export function Logo(){return <span className="brand-mark" aria-hidden="true"><img src="/hamster-logo-bold.png" alt="" width={28} height={28} draggable={false}/></span>}
 const colors=['purple','blue','orange','green','pink'];
@@ -10,9 +18,9 @@ export function Avatar({name,src,index=0,small=false}:{name:string;src?:string;i
  const [failed,setFailed]=useState(false);useEffect(()=>setFailed(false),[src]);
  return <span className={`creator-avatar ${colors[index%5]} ${small?'small':''}`}>{src&&!failed?<img src={src} alt="" loading="lazy" referrerPolicy="no-referrer" onError={()=>setFailed(true)}/>:name.slice(0,1)}</span>
 }
-export function CreatorIdentity({creator,index=0}:{creator:Creator;index?:number}){return <div className="identity"><Avatar name={creator.name} src={creator.avatar} index={index}/><div><strong>{creator.name}</strong><span className="muted tiny">{creator.platform==='bilibili'?'bilibili':'YouTube'} <span className="middot">·</span> {creator.url.split('/').at(-2)}</span></div></div>}
-export function Status({status}:{status:Task['status']}){const labels={queued:'等待下载',downloading:'下载中',paused:'已暂停',completed:'已完成',failed:'下载失败'};return <span className={`status ${status}`}><i/>{labels[status]}</span>}
-export function Kind({kind}:{kind:Task['kind']}){return <span className={`kind ${kind}`}>{kind==='dynamic'?<FileText size={12}/>:<Film size={12}/>} {kind==='dynamic'?'图文动态':'视频'}</span>}
+export function CreatorIdentity({creator,index=0}:{creator:Creator;index?:number}){return <div className="identity"><Avatar name={creator.name} src={creator.avatar} index={index}/><div><strong>{creator.name}</strong><span className="creator-platform-meta"><PlatformBadge platform={creator.platform}/>{creator.platform==='bilibili'&&<span className="muted tiny">UID {creator.url.match(/space\.bilibili\.com\/(\d+)/)?.[1]}</span>}</span></div></div>}
+export function Status({status}:{status:Task['status']}){const labels={queued:'等待下载',downloading:'下载中',paused:'已暂停',completed:'已完成',failed:'下载失败'};return <Chip as="span" size="sm" radius="sm" variant="flat" startContent={<i aria-hidden="true"/>} classNames={{base:`ui-tag status ${status}`,content:'ui-tag-value'}}>{labels[status]}</Chip>}
+export function Kind({kind}:{kind:Task['kind']}){return <span className={`kind ${kind}`}>{kind==='image_post'?<FileText size={12}/>:<Film size={12}/>} {kind==='image_post'?'图文':'视频'}</span>}
 export function Empty({icon=<Inbox size={28}/>,title,description,action}:{icon?:ReactNode;title:string;description?:string;action?:ReactNode}){return <div className="empty"><div className="empty-icon">{icon}</div><h3>{title}</h3>{description&&<p>{description}</p>}{action}</div>}
 export function ErrorNote({children}:{children:ReactNode}){return <div className="error-note"><TriangleAlert size={16}/><span>{children}</span></div>}
 export function ErrorText({message,className=''}:{message:string;className?:string}){return <Tooltip content={message} delay={0} closeDelay={200} placement="top" classNames={{base:'error-tooltip-layer',content:'error-tooltip'}}><span tabIndex={0} className={`error-detail ${className}`}>{message}</span></Tooltip>}
@@ -26,7 +34,7 @@ export function FileLocation({task,compact=false}:{task:Task;compact?:boolean}){
 }
 export function Thumbnail({task,onPress}:{task:Task;onPress?:()=>void}){
  const source=task.status==='completed'?`/api/tasks/${encodeURIComponent(task.id)}/thumbnail`:task.thumbnail;
- return <button className={`thumbnail ${task.kind}`} onClick={onPress} disabled={!onPress} aria-label={`查看 ${task.title}`}>{source?<img key={source} src={source} alt="" loading="lazy" referrerPolicy="no-referrer" onError={e=>{e.currentTarget.style.display='none'}}/>:null}<span className="thumb-fallback">{task.kind==='video'?<Film size={22}/>:<FileText size={22}/>}</span>{task.kind==='video'&&<span className="duration">{duration(task.duration)}</span>}{onPress&&<span className="thumb-play"><Play size={18} fill="currentColor"/></span>}</button>
+ return <button className={`thumbnail ${task.kind}`} onClick={onPress} disabled={!onPress} aria-label={`查看 ${task.title}`}>{source?<img key={source} src={source} alt="" loading="lazy" referrerPolicy="no-referrer" onError={e=>{e.currentTarget.style.display='none'}}/>:null}<span className="thumb-fallback">{task.kind==='video'?<Film size={22}/>:<FileText size={22}/>}</span>{task.kind==='video'&&<span className="duration">{duration(task.duration)}</span>}{onPress&&<span className="thumb-play">{task.kind==='video'?<Play size={18} fill="currentColor"/>:<Maximize2 size={18}/>}</span>}</button>
 }
 export function duration(seconds:number){return `${Math.floor(seconds/60)}:${String(Math.floor(seconds%60)).padStart(2,'0')}`}
 export function bytes(n:number){if(!Number.isFinite(n)||n<=0)return '0 B';const units=['B','KB','MB','GB','TB','PB'];const unit=Math.max(0,Math.min(Math.floor(Math.log(n)/Math.log(1024)),units.length-1));return `${(n/1024**unit).toFixed(unit===0&&n<1?1:unit<2?0:unit===2?1:2)} ${units[unit]}`}

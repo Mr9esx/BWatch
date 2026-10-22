@@ -1,7 +1,6 @@
-/* 所有页面及通过 Portal 渲染的菜单、弹窗统一使用 14px。 */
+/* 正文与表单默认使用 14px，标题、指标和标签由主题定义明确层级。 */
 :root{--muted:#667085}
-body{line-height:1.6}
-body,body *{font-size:14px!important}
+body{font-size:var(--text-body,14px);line-height:1.6}
 small{font-size:inherit}
 .muted,.nav-label,.breadcrumb,.service-status,.service-status small{color:var(--muted)}
 .nav-item{color:#475467}
@@ -11,10 +10,7 @@ small{font-size:inherit}
 .settings-section [data-slot=input],.settings-section [data-slot=value],.add-modal [data-slot=input],.add-modal [data-slot=value],.bili-login-card strong{color:#344054}
 .tab-group>button{color:#667085}
 .tab-group>button.active,.text-link,.monitor-link{color:#6657e8}
-.status.completed,.creator-card-bottom>span.enabled-label{color:#16836a}
-.status.downloading{color:#6657e8}
-.status.failed{color:#b5473c}
-.status.queued,.status.paused{color:#667085}
+.creator-card-bottom>span.enabled-label{color:#16836a}
 .panel-heading h2,.settings-title h2,.environment-card h2{font-size:16px}
 .library-title{height:48px;line-height:24px;width:100%;text-align:left}
 .task-content{min-width:300px}
@@ -44,7 +40,6 @@ small{font-size:inherit}
 .history-policy span,.schedule-help{color:#667085;font-size:14px;line-height:1.7}
 .schedule-help{margin:16px 0}
 .settings-section .download-spacing,.settings-section .schedule-help,.settings-section .bili-login-card{margin:0}
-.history-tag{font-size:14px;color:#6657e8;background:#f1edff;border-radius:4px;padding:0 5px}
 
 /* 顶部标签和说明文字参与文档流，表单按可用宽度自然换行。 */
 .settings-section [data-slot=base],.app-modal [data-slot=base]{min-width:0}
@@ -116,8 +111,7 @@ small{font-size:inherit}
 .filter-toolbar .tab-group>button,.filter-toolbar.inside .tab-group>button{padding:7px 10px;border-radius:7px;color:#667085;gap:6px;min-height:36px}
 .filter-toolbar .tab-group>button.active{background:#f0edff;color:#6657e8}
 .filter-toolbar .tab-group>button.active:after{display:none}
-.filter-toolbar .tab-group>button span{background:#f2f4f7;color:#667085;border-radius:5px;line-height:1.5}
-.filter-toolbar .tab-group>button.active span{background:#e4ddff;color:#6657e8}
+
 .toolbar-right{margin-left:auto;gap:10px;flex-wrap:wrap;justify-content:flex-end;min-width:0;max-width:100%}
 .page-search{display:flex;align-items:center;gap:8px;flex:1 1 200px;width:230px;max-width:100%;min-width:180px;height:36px;padding:0 10px;background:#f8f9fc;border:1px solid #e4e7ee;border-radius:8px;color:#667085;transition:border-color .15s,box-shadow .15s}
 .page-search:focus-within{background:#fff;border-color:#8d7ced;box-shadow:0 0 0 3px #6c5ce714}

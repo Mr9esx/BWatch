@@ -9,3 +9,5 @@ bin/
 playwright-report/
 test-results/
 *.tsbuildinfo
+
+__pycache__/

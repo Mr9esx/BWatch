@@ -47,11 +47,7 @@ func (a *App) startContentTotalsRefresh(ctx context.Context) bool {
 }
 
 func (a *App) fetchContentTotals(ctx context.Context, c Creator, s Settings) (*ContentTotals, error) {
-	cookiePath, err := a.bilibiliCookies(ctx, s)
-	if err != nil {
-		return nil, err
-	}
-	cookie, err := cookiesForBilibili(cookiePath)
+	cookie, _, err := a.bilibiliCookieHeader(ctx, s)
 	if err != nil {
 		return nil, err
 	}

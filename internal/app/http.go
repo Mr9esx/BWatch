@@ -44,7 +44,7 @@ func (a *App) serveThumbnail(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		var candidates []string
-		if task.Kind == "dynamic" {
+		if task.Kind == "image_post" {
 			if len(task.Files) > 0 {
 				candidates = task.Files[:1]
 			}
@@ -84,6 +84,37 @@ func (a *App) Handler(ctx context.Context, webDir, devOrigin string) http.Handle
 	mux.HandleFunc("GET /api/bilibili/account", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, 200, a.BilibiliAccount(r.Context()))
+	})
+	mux.HandleFunc("GET /api/xiaohongshu/account", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, 200, a.XHSAccount(r.Context()))
+	})
+	mux.HandleFunc("GET /api/platforms/{platform}/account", func(w http.ResponseWriter, r *http.Request) {
+		platform := PlatformID(r.PathValue("platform"))
+		if _, ok := a.platforms.byPlatform(platform); !ok {
+			apiError(w, 404, errors.New("不支持的平台"))
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, 200, a.SavedPlatformAccount(platform))
+	})
+	mux.HandleFunc("POST /api/xiaohongshu/login/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, 200, a.CaptureXHSLogin(r.Context()))
+	})
+	mux.HandleFunc("POST /api/xiaohongshu/login", func(w http.ResponseWriter, r *http.Request) {
+		if err := a.StartXHSLogin(r.Context()); err != nil {
+			apiError(w, 500, err)
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("POST /api/xiaohongshu/logout", func(w http.ResponseWriter, r *http.Request) {
+		if err := a.LogoutXHS(r.Context()); err != nil {
+			apiError(w, 500, err)
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 	mux.HandleFunc("POST /api/creators/{id}/history", func(w http.ResponseWriter, r *http.Request) {
 		var in HistoryInput
@@ -140,7 +171,7 @@ func (a *App) Handler(ctx context.Context, webDir, devOrigin string) http.Handle
 			apiError(w, 400, err)
 			return
 		}
-		c, err := a.AddCreator(in)
+		c, err := a.AddCreatorContext(r.Context(), in)
 		if err != nil {
 			apiError(w, 400, err)
 			return
@@ -286,7 +317,7 @@ func (a *App) Handler(ctx context.Context, webDir, devOrigin string) http.Handle
 			origin := r.Header.Get("Origin")
 			if origin != "" {
 				u, err := url.Parse(origin)
-				if err != nil || ((u.Host != r.Host || (u.Scheme != "https" && u.Scheme != "http")) && origin != devOrigin) {
+				if err != nil || ((u.Host != r.Host || (u.Scheme != "https" && u.Scheme != "http")) && !isAllowedDevOrigin(origin, devOrigin)) {
 					apiError(w, 403, errors.New("拒绝跨来源修改请求"))
 					return
 				}
@@ -294,4 +325,13 @@ func (a *App) Handler(ctx context.Context, webDir, devOrigin string) http.Handle
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+func isAllowedDevOrigin(origin, configured string) bool {
+	for _, candidate := range strings.Split(configured, ",") {
+		if strings.TrimSpace(candidate) == origin {
+			return true
+		}
+	}
+	return false
 }

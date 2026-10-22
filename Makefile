@@ -1,4 +1,4 @@
-.PHONY: install install-ytdlp build run dev-server dev-web test
+.PHONY: install install-ytdlp install-xhs-api build run dev-server dev-web test
 
 NPM ?= npm
 
@@ -7,6 +7,9 @@ install:
 
 install-ytdlp:
 	./scripts/install-ytdlp.sh
+
+install-xhs-api:
+	sh scripts/install-xhs-api.sh
 
 build:
 	$(NPM) --prefix web run build

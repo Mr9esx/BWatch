@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"math/rand/v2"
+	"strconv"
 	"time"
 )
 
@@ -50,8 +51,9 @@ func (a *App) StartHistory(creatorID string, in HistoryInput) error {
 			if c.ID != creatorID {
 				continue
 			}
-			if c.Platform != "bilibili" {
-				return errors.New("历史拉取目前仅支持 B 站")
+			provider, ok := a.platforms.byPlatform(c.Platform)
+			if !ok || !provider.Capabilities().History {
+				return errors.New("该平台暂不支持历史拉取")
 			}
 			if !c.Enabled {
 				return errors.New("请先启用订阅")
@@ -96,6 +98,9 @@ func (a *App) HistoryAction(creatorID, action string) error {
 					return errors.New("历史任务已经结束")
 				}
 				h.Status = "cancelled"
+				a.historyCacheMu.Lock()
+				delete(a.historyCache, h.ID)
+				a.historyCacheMu.Unlock()
 			default:
 				return errors.New("未知历史操作")
 			}
@@ -119,11 +124,11 @@ func (a *App) ProcessHistoryPage(ctx context.Context, creatorID string) error {
 	h := creator.HistoryJob
 	pending := 0
 	for _, t := range a.state.Tasks {
-		if isBilibiliTask(t) && (t.Status == "queued" || t.Status == "downloading" || t.Status == "paused") {
+		if t.Status == "queued" || t.Status == "downloading" || t.Status == "paused" {
 			pending++
 		}
 	}
-	if h == nil || h.Status != "running" || !creator.Enabled || a.state.Paused || a.checking[creatorID] || a.historyBusy || pending >= 50 || now.Before(h.NextPageAt) || future(a.state.NextHistoryPageAt, now) || future(a.state.BilibiliBlockedUntil, now) {
+	if h == nil || h.Status != "running" || !creator.Enabled || a.state.Paused || a.checking[creatorID] || a.historyBusy || pending >= 50 || now.Before(h.NextPageAt) || future(a.state.NextHistoryPageAt, now) || future(a.platformBlockedUntilLocked(creator.Platform), now) {
 		a.mu.Unlock()
 		return nil
 	}
@@ -140,9 +145,13 @@ func (a *App) ProcessHistoryPage(ctx context.Context, creatorID string) error {
 	}); err != nil {
 		return err
 	}
-	reqCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	timeout := 45 * time.Second
+	if creator.Platform == PlatformXiaohongshu {
+		timeout = 10 * time.Minute
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	feed, err := a.fetchBilibiliPage(reqCtx, creator, settings, job.Offset)
+	feed, err := a.fetchHistoryPage(reqCtx, creator, settings, job)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -155,9 +164,12 @@ func (a *App) ProcessHistoryPage(ctx context.Context, creatorID string) error {
 			h := c.HistoryJob
 			if err != nil {
 				h.Error = err.Error()
-				if isRiskError(h.Error) {
-					if a.state.BilibiliBlockedUntil != nil {
-						h.NextPageAt = *a.state.BilibiliBlockedUntil
+				if isPlatformRiskError(creator.Platform, h.Error) {
+					if creator.Platform == PlatformXiaohongshu {
+						a.blockPlatformLocked(creator.Platform, h.Error, time.Now())
+					}
+					if until := a.platformBlockedUntilLocked(creator.Platform); until != nil {
+						h.NextPageAt = *until
 					} else {
 						h.Status = "failed"
 					}
@@ -191,21 +203,22 @@ func (a *App) ProcessHistoryPage(ctx context.Context, creatorID string) error {
 			}
 			existing := map[string]bool{}
 			for _, t := range a.state.Tasks {
-				if isBilibiliTask(t) && (t.Status == "queued" || t.Status == "downloading" || t.Status == "paused") {
+				if t.Status == "queued" || t.Status == "downloading" || t.Status == "paused" {
 					pending++
 				}
 				if t.CreatorID == c.ID {
-					existing[t.Kind+":"+t.VideoID] = true
+					existing[string(t.Kind)+":"+t.VideoID] = true
 				}
 			}
 			queueFull := false
-			add := func(entries []Entry, kind string) {
+			add := func(entries []Entry, kind ContentKind) {
 				for _, e := range entries {
 					if e.ID == "" || (h.Limit > 0 && h.Videos+h.Dynamics >= h.Limit) {
 						continue
 					}
-					if existing[kind+":"+e.ID] || h.SeenEntries[kind+":"+e.ID] {
-						h.SeenEntries[kind+":"+e.ID] = true
+					key := string(kind) + ":" + e.ID
+					if existing[key] || h.SeenEntries[key] {
+						h.SeenEntries[key] = true
 						continue
 					}
 					if pending >= 50 {
@@ -216,10 +229,10 @@ func (a *App) ProcessHistoryPage(ctx context.Context, creatorID string) error {
 					if title == "" {
 						title = e.ID
 					}
-					a.state.Tasks = append(a.state.Tasks, Task{ID: id(), CreatorID: c.ID, CreatorName: c.Name, VideoID: e.ID, Kind: kind, Title: title, URL: e.URL, Thumbnail: e.Thumbnail, Duration: e.Duration, Quality: c.Quality, Status: "queued", Content: e.Content, Images: e.Images, CreatedAt: time.Now(), HistoryJobID: h.ID})
+					a.state.Tasks = append(a.state.Tasks, Task{ID: id(), Platform: c.Platform, CreatorID: c.ID, CreatorName: c.Name, VideoID: e.ID, Kind: kind, Title: title, URL: e.URL, Thumbnail: e.Thumbnail, Duration: e.Duration, Quality: c.Quality, Status: "queued", Content: e.Content, Images: e.Images, CreatedAt: time.Now(), HistoryJobID: h.ID})
 					pending++
-					existing[kind+":"+e.ID] = true
-					h.SeenEntries[kind+":"+e.ID] = true
+					existing[key] = true
+					h.SeenEntries[key] = true
 					if kind == "video" {
 						h.Videos++
 						c.Seen[e.ID] = true
@@ -230,10 +243,10 @@ func (a *App) ProcessHistoryPage(ctx context.Context, creatorID string) error {
 				}
 			}
 			if h.WatchVideos {
-				add(feed.Videos, "video")
+				add(feed.Videos, ContentVideo)
 			}
 			if h.WatchDynamics {
-				add(feed.Dynamics, "dynamic")
+				add(feed.Dynamics, ContentImagePost)
 			}
 			h.Error = ""
 			h.NextPageAt = *a.state.NextHistoryPageAt
@@ -255,10 +268,65 @@ func (a *App) ProcessHistoryPage(ctx context.Context, creatorID string) error {
 				at := time.Now()
 				h.FinishedAt = &at
 				a.event("success", fmt.Sprintf("「%s」历史拉取完成，新增 %d 个下载任务", c.Name, h.Videos+h.Dynamics))
+				if creator.Platform == PlatformXiaohongshu {
+					a.historyCacheMu.Lock()
+					delete(a.historyCache, h.ID)
+					a.historyCacheMu.Unlock()
+				}
 			}
 			return nil
 		}
 		return nil
 	})
+}
+
+func (a *App) fetchHistoryPage(ctx context.Context, creator Creator, settings Settings, job HistoryJob) (bilibiliFeed, error) {
+	if creator.Platform == PlatformBilibili {
+		return a.fetchBilibiliPage(ctx, creator, settings, job.Offset)
+	}
+	if creator.Platform != PlatformXiaohongshu {
+		return bilibiliFeed{}, errors.New("该平台暂不支持历史拉取")
+	}
+	a.historyCacheMu.Lock()
+	cached, ok := a.historyCache[job.ID]
+	a.historyCacheMu.Unlock()
+	if !ok {
+		provider, exists := a.platforms.byPlatform(creator.Platform)
+		if !exists {
+			return bilibiliFeed{}, errors.New("未注册小红书平台适配器")
+		}
+		result, err := provider.Scan(ctx, a, creator, settings)
+		if err != nil {
+			return bilibiliFeed{}, err
+		}
+		cached = result
+		a.historyCacheMu.Lock()
+		a.historyCache[job.ID] = cached
+		a.historyCacheMu.Unlock()
+	}
+	start := 0
+	if job.Offset != "" {
+		value, err := strconv.Atoi(job.Offset)
+		if err != nil || value < 0 {
+			return bilibiliFeed{}, errors.New("历史分页位置无效")
+		}
+		start = value
+	}
+	if start > len(cached.Entries) {
+		return bilibiliFeed{}, errors.New("小红书历史分页位置超过笔记列表")
+	}
+	end := min(start+30, len(cached.Entries))
+	feed := bilibiliFeed{Name: cached.Name, Avatar: cached.Avatar, Complete: end == len(cached.Entries), More: end < len(cached.Entries)}
+	for _, entry := range cached.Entries[start:end] {
+		if entry.Kind == ContentVideo {
+			feed.Videos = append(feed.Videos, entry)
+		} else if entry.Kind == ContentImagePost {
+			feed.Dynamics = append(feed.Dynamics, entry)
+		}
+	}
+	if feed.More {
+		feed.Offset = strconv.Itoa(end)
+	}
+	return feed, nil
 }
 func future(t *time.Time, now time.Time) bool { return t != nil && now.Before(*t) }

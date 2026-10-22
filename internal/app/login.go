@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -156,12 +154,12 @@ func (a *App) PollLogin(ctx context.Context, sessionID string) (LoginStatus, err
 		if !haveLogin {
 			return session.LoginStatus, errors.New("手机已确认，但 B 站尚未返回有效登录 Cookie，请重新扫码")
 		}
-		path := filepath.Join(filepath.Dir(a.statePath), "bilibili-login-"+session.ID+".cookies.txt")
-		if err := os.WriteFile(path, []byte(data.String()), 0600); err != nil {
-			return session.LoginStatus, errors.New("保存登录 Cookie 失败，请检查数据目录权限")
+		if err := a.saveCredential(PlatformBilibili, []byte(data.String())); err != nil {
+			return session.LoginStatus, fmt.Errorf("加密保存登录 Cookie 失败: %w", err)
 		}
 		err := a.transaction(func() error {
-			a.state.Settings.CookiesFile = path
+			a.state.Settings.BilibiliCookiesFile = ""
+			a.state.Settings.CookiesFile = ""
 			for i := range a.state.Creators {
 				if a.state.Creators[i].Platform == "bilibili" {
 					a.state.Creators[i].NextCheckAt = nil
@@ -172,12 +170,11 @@ func (a *App) PollLogin(ctx context.Context, sessionID string) (LoginStatus, err
 			return nil
 		})
 		if err != nil {
-			os.Remove(path)
 			return session.LoginStatus, errors.New("保存登录设置失败，请检查数据目录权限")
 		}
 		session.State = "success"
 		session.Message = "登录成功，已用于视频与图文监听"
-		session.CookiesFile = path
+		session.CookiesFile = ""
 		session.URL = ""
 		session.Key = ""
 		session.Client.CloseIdleConnections()

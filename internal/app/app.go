@@ -1,12 +1,12 @@
 package app
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
-	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -24,44 +24,54 @@ func (a *App) event(level, message string) {
 var uidPattern = regexp.MustCompile(`^[0-9]{1,20}$`)
 
 func NormalizeCreatorURL(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if uidPattern.MatchString(raw) {
-		return "https://space.bilibili.com/" + raw + "/video", nil
+	ref, err := newPlatformRegistry().normalizeCreatorURL(raw)
+	if err != nil {
+		return "", err
 	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "https" || u.User != nil || u.Port() != "" {
-		return "", errors.New("请输入 B 站 UID、HTTPS 空间地址或 YouTube 频道地址")
-	}
-	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-	if u.Hostname() == "space.bilibili.com" && len(parts) > 0 && uidPattern.MatchString(parts[0]) {
-		return "https://space.bilibili.com/" + parts[0] + "/video", nil
-	}
-	if u.Hostname() == "www.youtube.com" || u.Hostname() == "youtube.com" {
-		if len(parts) > 0 && strings.HasPrefix(parts[0], "@") && len(parts[0]) > 1 {
-			return "https://www.youtube.com/" + parts[0] + "/videos", nil
-		}
-		if len(parts) >= 2 && (parts[0] == "channel" || parts[0] == "c" || parts[0] == "user") && parts[1] != "" {
-			return "https://www.youtube.com/" + parts[0] + "/" + parts[1] + "/videos", nil
-		}
-	}
-	return "", errors.New("暂支持 B 站空间和 YouTube 频道，不能使用单个视频地址")
+	return ref.URL, nil
 }
 func validQuality(q string) bool {
 	return slices.Contains([]string{"best", "2160", "1080", "720", "480"}, q)
 }
 func (a *App) AddCreator(in CreatorInput) (Creator, error) {
+	return a.AddCreatorContext(context.Background(), in)
+}
+
+func (a *App) AddCreatorContext(ctx context.Context, in CreatorInput) (Creator, error) {
 	var c Creator
-	u, err := NormalizeCreatorURL(in.URL)
+	ref, err := a.platforms.normalizeCreatorForPlatform(in.Platform, in.URL)
 	if err != nil {
 		return c, err
 	}
 	if in.Interval < 1 || in.Interval > 1440 || !validQuality(in.Quality) {
 		return c, errors.New("检查间隔应为 1–1440 分钟，请选择有效画质")
 	}
-	platform := "bilibili"
-	if strings.Contains(u, "youtube.com") {
-		platform = "youtube"
+	platform := ref.Platform
+	provider, ok := a.platforms.byPlatform(platform)
+	if !ok {
+		return c, errors.New("不支持的平台")
 	}
+	capabilities := provider.Capabilities()
+	if capabilities.LoginRequired {
+		if a.SavedPlatformAccount(platform).State != "logged_in" {
+			return c, fmt.Errorf("请先在平台管理登录%s账号，再添加订阅", contentPlatformLabel(platform))
+		}
+	}
+	if platform == PlatformXiaohongshu && strings.HasPrefix(ref.URL, "xhsid:") {
+		redID := strings.TrimPrefix(ref.URL, "xhsid:")
+		resolved, resolveErr := a.resolveXHSRedID(ctx, redID)
+		if resolveErr != nil {
+			return c, resolveErr
+		}
+		ref = resolved
+	}
+	if platform == PlatformXiaohongshu && ref.ID == "" {
+		ref, err = a.resolveXHSShareURL(ctx, ref.URL)
+		if err != nil {
+			return c, err
+		}
+	}
+	u := ref.URL
 	watch := true
 	if in.WatchVideos != nil {
 		watch = *in.WatchVideos
@@ -69,22 +79,32 @@ func (a *App) AddCreator(in CreatorInput) (Creator, error) {
 	if !watch && !in.WatchDynamics {
 		return c, errors.New("至少选择一种监听内容")
 	}
-	if in.WatchDynamics && platform != "bilibili" {
-		return c, errors.New("图文动态目前仅支持 B 站")
+	if (watch && !capabilities.Videos) || (in.WatchDynamics && !capabilities.ImagePosts) {
+		return c, errors.New("该平台不支持所选内容类型")
 	}
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
-		parts := strings.Split(u, "/")
-		name = parts[len(parts)-2]
+		name = ref.Name
+	}
+	if name == "" {
+		name = ref.ID
+		if name == "" {
+			name = "小红书博主"
+		}
 	}
 	if len([]rune(name)) > 80 {
 		return c, errors.New("名称最多 80 字")
 	}
-	c = Creator{ID: id(), Name: name, URL: u, Platform: platform, Interval: in.Interval, Quality: in.Quality, History: in.History, WatchVideos: watch, WatchDynamics: in.WatchDynamics, Enabled: true, CreatedAt: time.Now(), Seen: map[string]bool{}, SeenDynamics: map[string]bool{}}
+	c = Creator{ID: id(), Name: name, Avatar: ref.Avatar, URL: u, Platform: platform, Interval: in.Interval, Quality: in.Quality, History: in.History, WatchVideos: watch, WatchDynamics: in.WatchDynamics, Enabled: true, CreatedAt: time.Now(), Seen: map[string]bool{}, SeenDynamics: map[string]bool{}}
 	err = a.transaction(func() error {
 		for _, old := range a.state.Creators {
-			if old.URL == u {
-				return errors.New("已经订阅过这个 UP 主")
+			sameCreator := old.URL == u
+			if old.Platform == platform && ref.ID != "" {
+				oldRef, normalizeErr := provider.NormalizeCreatorURL(old.URL)
+				sameCreator = sameCreator || (normalizeErr == nil && oldRef.ID == ref.ID)
+			}
+			if sameCreator {
+				return errors.New("已经订阅过这个创作者")
 			}
 		}
 		a.state.Creators = append(a.state.Creators, c)
@@ -94,12 +114,12 @@ func (a *App) AddCreator(in CreatorInput) (Creator, error) {
 	return c, err
 }
 func (a *App) ApplyScan(creatorID string, entries []Entry, name string) error {
-	return a.applyScan(creatorID, entries, name, "video", "")
+	return a.applyScan(creatorID, entries, name, ContentVideo, "")
 }
 func (a *App) ApplyDynamicScan(creatorID string, entries []Entry, name string) error {
-	return a.applyScan(creatorID, entries, name, "dynamic", "")
+	return a.applyScan(creatorID, entries, name, ContentImagePost, "")
 }
-func (a *App) applyScan(creatorID string, entries []Entry, name, kind, avatar string) error {
+func (a *App) applyScan(creatorID string, entries []Entry, name string, kind ContentKind, avatar string) error {
 	return a.transaction(func() error {
 		for i := range a.state.Creators {
 			c := &a.state.Creators[i]
@@ -117,7 +137,7 @@ func (a *App) applyScan(creatorID string, entries []Entry, name, kind, avatar st
 			}
 			seen := c.Seen
 			initialized := c.Initialized
-			if kind == "dynamic" {
+			if kind == ContentImagePost {
 				seen = c.SeenDynamics
 				initialized = c.DynamicInitialized
 			}
@@ -142,12 +162,12 @@ func (a *App) applyScan(creatorID string, entries []Entry, name, kind, avatar st
 				}
 				title := e.Title
 				if title == "" {
-					title = map[string]string{"video": "视频 ", "dynamic": "动态 "}[kind] + e.ID
+					title = map[ContentKind]string{ContentVideo: "视频 ", ContentImagePost: "图文 "}[kind] + e.ID
 				}
-				a.state.Tasks = append(a.state.Tasks, Task{ID: id(), CreatorID: c.ID, CreatorName: c.Name, VideoID: e.ID, Kind: kind, Title: title, URL: e.URL, Thumbnail: e.Thumbnail, Duration: e.Duration, Quality: c.Quality, Status: "queued", Content: e.Content, Images: e.Images, CreatedAt: time.Now()})
+				a.state.Tasks = append(a.state.Tasks, Task{ID: id(), Platform: c.Platform, CreatorID: c.ID, CreatorName: c.Name, VideoID: e.ID, Kind: kind, Title: title, URL: e.URL, Thumbnail: e.Thumbnail, Duration: e.Duration, Quality: c.Quality, Status: "queued", Content: e.Content, Images: e.Images, CreatedAt: time.Now()})
 				count++
 			}
-			if kind == "dynamic" {
+			if kind == ContentImagePost {
 				c.DynamicInitialized = true
 			} else {
 				c.Initialized = true
@@ -155,7 +175,7 @@ func (a *App) applyScan(creatorID string, entries []Entry, name, kind, avatar st
 			if count > 0 {
 				a.event("info", fmt.Sprintf("「%s」发现 %d 条新内容，已加入下载队列", c.Name, count))
 			} else if !initialized {
-				a.event("info", "「"+c.Name+"」已建立"+map[string]string{"video": "视频", "dynamic": "动态"}[kind]+"基线")
+				a.event("info", "「"+c.Name+"」已建立"+map[ContentKind]string{ContentVideo: "视频", ContentImagePost: "图文"}[kind]+"基线")
 			}
 			return nil
 		}
@@ -232,6 +252,22 @@ func (a *App) TaskAction(taskID, action string) error {
 	return err
 }
 func (a *App) UpdateSettings(s Settings) error {
+	s.BilibiliCookiesFile = ""
+	s.CookiesFile = ""
+	if s.DownloadMinInterval == 0 {
+		s.DownloadMinInterval = s.BilibiliMinInterval
+		if s.DownloadMinInterval == 0 {
+			s.DownloadMinInterval = 1
+		}
+	}
+	if s.DownloadMaxInterval == 0 {
+		s.DownloadMaxInterval = s.BilibiliMaxInterval
+		if s.DownloadMaxInterval == 0 {
+			s.DownloadMaxInterval = 3
+		}
+	}
+	s.BilibiliMinInterval = s.DownloadMinInterval
+	s.BilibiliMaxInterval = s.DownloadMaxInterval
 	s.ProxyURL = strings.TrimSpace(s.ProxyURL)
 	if err := validateProxy(s.ProxyURL); err != nil {
 		return err
@@ -242,8 +278,8 @@ func (a *App) UpdateSettings(s Settings) error {
 	if s.Concurrency < 1 || s.Concurrency > 4 || s.Interval < 1 || s.Interval > 1440 || !validQuality(s.Quality) {
 		return errors.New("并发数应为 1–4，检查间隔应为 1–1440 分钟，请选择有效画质")
 	}
-	if s.BilibiliMinInterval < 1 || s.BilibiliMaxInterval < s.BilibiliMinInterval || s.BilibiliMaxInterval > 1440 {
-		return errors.New("B 站下载间隔应为 1–1440 分钟，最大值不能小于最小值")
+	if s.DownloadMinInterval < 1 || s.DownloadMaxInterval < s.DownloadMinInterval || s.DownloadMaxInterval > 1440 {
+		return errors.New("下载间隔应为 1–1440 分钟，最大值不能小于最小值")
 	}
 	return a.transaction(func() error { a.state.Settings = s; a.event("success", "全局设置已保存"); return nil })
 }

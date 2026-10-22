@@ -27,11 +27,11 @@ type accountCache struct {
 
 func (a *App) BilibiliAccount(ctx context.Context) (result BilibiliAccount) {
 	s := a.Snapshot().Settings
-	if s.CookiesFile == "" {
-		return BilibiliAccount{State: "logged_out", Message: "未登录"}
-	}
-	header, err := cookiesForBilibili(s.CookiesFile)
+	header, _, err := a.bilibiliCookieHeader(ctx, s)
 	if err != nil {
+		if strings.Contains(err.Error(), "请先") {
+			return BilibiliAccount{State: "logged_out", Message: "未登录"}
+		}
 		return BilibiliAccount{State: "unavailable", Message: "登录凭据不可读"}
 	}
 	haveSession := false
@@ -43,7 +43,7 @@ func (a *App) BilibiliAccount(ctx context.Context) (result BilibiliAccount) {
 	if !haveSession {
 		return BilibiliAccount{State: "expired", Message: "登录已失效"}
 	}
-	key := sha256.Sum256([]byte(s.CookiesFile + "\x00" + proxyURL(s) + "\x00" + header))
+	key := sha256.Sum256([]byte(proxyURL(s) + "\x00" + header))
 	// ponytail: 单账号共用锁合并多标签页查询；多账号支持时再按账号拆分。
 	a.accountMu.Lock()
 	defer a.accountMu.Unlock()
@@ -113,4 +113,56 @@ func (a *App) BilibiliAccount(ctx context.Context) (result BilibiliAccount) {
 		avatar = u.String()
 	}
 	return BilibiliAccount{State: "logged_in", UID: payload.Data.MID, Name: payload.Data.Name, Avatar: avatar, Message: "已登录"}
+}
+
+// Profile retrieval is independent of local credential availability. A failed
+// profile request must not gate subscriptions or start a login browser.
+type xhsAccountCache struct {
+	key     [32]byte
+	until   time.Time
+	account XHSAccount
+}
+
+func (a *App) XHSAccount(ctx context.Context) XHSAccount {
+	result := a.SavedPlatformAccount(PlatformXiaohongshu)
+	if result.State != "logged_in" {
+		return result
+	}
+	credential, err := a.loadCredential(PlatformXiaohongshu)
+	if err != nil {
+		return XHSAccount{State: "unavailable", Message: "登录凭据不可读，请重新登录"}
+	}
+	key := sha256.Sum256(append([]byte(proxyURL(a.Snapshot().Settings)+"\x00"), credential...))
+	a.xhsAccountMu.Lock()
+	defer a.xhsAccountMu.Unlock()
+	if a.xhsAccount.key == key {
+		if time.Now().Before(a.xhsAccount.until) {
+			return a.xhsAccount.account
+		}
+		result = a.xhsAccount.account
+		result.ProfileMessage = ""
+	}
+	ttl := 5 * time.Minute
+	defer func() { a.xhsAccount = xhsAccountCache{key: key, until: time.Now().Add(ttl), account: result} }()
+	if a.platformBlocked(PlatformXiaohongshu, time.Now()) {
+		result.ProfileMessage = "平台冷却中，稍后刷新账号资料"
+		ttl = time.Minute
+		return result
+	}
+	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	var profile XHSAccount
+	if err := a.callXHSAPI(ctx, xhsAPIRequest{Operation: "account"}, &profile); err != nil {
+		result.ProfileMessage = "账号资料获取失败，稍后可刷新；订阅仍使用已保存凭据"
+		ttl = time.Minute
+		_ = a.transaction(func() error { a.blockPlatformLocked(PlatformXiaohongshu, err.Error(), time.Now()); return nil })
+		return result
+	}
+	if !xhsProfileID.MatchString(profile.ID) || strings.TrimSpace(profile.Name) == "" {
+		result.ProfileMessage = "平台未返回有效的账号资料，请稍后刷新"
+		ttl = time.Minute
+		return result
+	}
+	result.ID, result.RedID, result.Name, result.Avatar = profile.ID, profile.RedID, profile.Name, secureXHSImageURL(profile.Avatar)
+	return result
 }
