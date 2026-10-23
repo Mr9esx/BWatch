@@ -8,4 +8,5 @@ import './readability.css';
 import './neobrutalism.css';
 import './creator-layout.css';
 import './motion.css';
+import './library.css';
 ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><MotionConfig reducedMotion="user"><LayoutGroup id="bilifetch"><HeroUIProvider locale="zh-CN" reducedMotion="user"><App/></HeroUIProvider></LayoutGroup></MotionConfig></React.StrictMode>);

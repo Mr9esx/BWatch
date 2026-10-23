@@ -15,49 +15,51 @@ const creator=(id,name,platform)=>({id,name,platform,url:`https://example.invali
 const creators=[creator('one','创作者甲','bilibili'),creator('two','创作者乙','xiaohongshu')];
 const task=(id,creatorId,creatorName,platform,kind='video',status='completed')=>({id,creatorId,creatorName,platform,kind,videoId:id,title:`内容标题-${id}`,url:`https://example.invalid/${id}`,thumbnail:'',duration:30,quality:'best',status,progress:100,speed:'',eta:'',error:'',file:`/archive/${id}/content`,bytes:100,createdAt:'2026-10-21T00:00:00Z',finishedAt:status==='completed'?'2026-10-22T00:00:00Z':null});
 const tasks=[task('甲视频','one','旧名称','bilibili'),task('甲图文','one','旧名称','bilibili','image_post'),task('乙视频','two','创作者乙','xiaohongshu'),task('遗留归档','removed','已移除创作者','bilibili'),task('未完成','one','旧名称','bilibili','video','queued')];
-function render(scope={creatorId:null,platform:'all'},search=''){
- const model={state:{...emptyState,creators,tasks},health:null,search,setSearch(){},page:'library',libraryScope:scope,navigate(){},openAdd(){},act:async()=>true,preview(){},notify(){},confirm(){}};
- return renderToStaticMarkup(React.createElement(AppContext.Provider,{value:model},React.createElement(Library)));
+const model=(scope={},overrides={})=>({state:{...emptyState,creators,tasks},health:null,loading:false,search:'',setSearch(){},page:'library',libraryScope:{creatorId:null,platform:'all',view:'all',...scope},navigate(){},openAdd(){},act:async()=>true,preview(){},notify(){},confirm(){},...overrides});
+const render=(scope={},overrides={})=>renderToStaticMarkup(React.createElement(AppContext.Provider,{value:model(scope,overrides)},React.createElement(Library)));
+function assertShell(html){
+ assert.match(html,/aria-label="内容库统计"/,'视图切换和作者详情必须保留同一个统计区');
+ assert.match(html,/role="tablist"[^>]*aria-label="内容库视图"|aria-label="内容库视图"[^>]*role="tablist"/,'内容库视图必须使用组件库 Tab');
+ assert.match(html,/role="tabpanel"/,'视图内容必须放入组件库的 TabPanel');
+ assert.equal((html.match(/<h1/g)||[]).length,1,'每个视图只应保留一个内容库页面标题');
 }
-
-const folders=render();
-assert.match(folders,/role="tablist"[^>]*aria-label="内容库平台"|aria-label="内容库平台"[^>]*role="tablist"/,'平台筛选必须使用组件库 Tab');
-assert.ok(!folders.includes('筛选内容库平台'),'不应继续显示平台下拉框');
-assert.ok(!folders.includes('内容标题-甲视频'),'进入内容库时应先选择创作者，不能直接渲染归档文件');
-assert.match(folders,/href="#library\?creator=one"/,'创作者文件夹必须能打开对应的归档路径');
-assert.match(folders,/href="#library\?creator=two"/,'不同创作者必须有独立的文件夹入口');
-assert.match(folders,/href="#library\?creator=removed"/,'已移除订阅的归档仍须可以从文件夹进入');
-const bilibili=render({creatorId:null,platform:'bilibili'});
-assert.ok(!bilibili.includes('重置筛选'),'平台Tab是浏览范围，不应产生额外重置筛选行');
-assert.match(bilibili,/href="#library\?platform=bilibili&amp;creator=one"/,'打开平台内的文件夹必须保留平台范围');
-assert.ok(!bilibili.includes('创作者乙'),'平台筛选不能混入其他平台的创作者文件夹');
-const searched=render({creatorId:null,platform:'all'},'创作者乙');
-assert.match(searched,/清除创作者筛选/,'搜索时应提供紧凑的清除筛选入口');
-assert.match(searched,/href="#library\?creator=two"/,'根目录搜索应能定位创作者文件夹');
-assert.ok(!searched.includes('href="#library?creator=one"'),'根目录搜索不能继续展示无关的创作者');
-
-const detail=render({creatorId:'one',platform:'all'});
-assert.match(detail,/返回创作者列表/,'创作者内容页必须提供明确的返回按钮');
-assert.match(render({creatorId:'one',platform:'bilibili'}),/href="#library\?platform=bilibili"[^>]*>.*?返回创作者列表/s,'返回按钮必须保留原平台');
-assert.ok(!detail.includes('创作者乙'),'文件夹内不应保留其他创作者侧栏');
-assert.match(detail,/href="#library"/,'文件夹内必须提供返回根目录的路径');
-assert.match(detail,/搜索该创作者的归档内容/,'文件夹搜索必须明确限定在当前创作者');
-assert.match(detail,/全部类型/,'文件夹内必须保留内容类型筛选');
-assert.match(detail,/内容排序/,'文件夹内必须保留归档排序');
-const removed=render({creatorId:'removed',platform:'all'});
-assert.match(removed,/已移除创作者/,'没有订阅资料的文件夹应继续显示任务保存的作者名称');
-
+const all=render();assertShell(all);
+assert.match(all,/内容标题-甲视频/,'默认视图必须支持跨创作者浏览全部归档');
+assert.match(all,/内容标题-乙视频/,'默认内容不能遗漏其他平台');
+assert.ok(!all.includes('内容标题-未完成'),'未完成任务不能混入归档');
+const large=render({}, {state:{...emptyState,creators,tasks:Array.from({length:1000},(_,i)=>task('large-'+i,'one','创作者甲','bilibili'))}});
+assert.equal((large.match(/class="library-item library-card panel"/g)||[]).length,24,'大量归档每页只挂载 24 张卡片');
+const folders=render({view:'creators'});assertShell(folders);
+assert.match(folders,/创作者归档文件夹/,'创作者 Tab 应在共享面板中显示文件夹');
+assert.match(folders,/creator=one/,'作者卡片须支持对应归档的可复制直达链接');
+assert.match(folders,/creator=removed/,'移除订阅后仍可访问历史归档');
+const detail=render({creatorId:'one',view:'creators'});assertShell(detail);
+assert.match(detail,/返回创作者列表/,'作者归档必须可返回原 Tab');
+assert.match(detail,/搜索该创作者的归档内容/,'作者归档搜索必须明确限定范围');
+assert.match(detail,/内容标题-甲图文/,'作者归档须展示对应的内容');
+assert.ok(!detail.includes('内容标题-乙视频'),'作者范围不能混入其他作者的归档');
+assert.match(render({creatorId:'removed',view:'creators'}),/已移除创作者/,'旧归档可使用任务保存的作者信息');
+const scoped=render({view:'creators',platform:'bilibili'});
+assert.match(scoped,/platform=bilibili/,'平台内打开作者必须保留平台范围');
+assert.ok(!scoped.includes('创作者乙'),'平台筛选不能混入其他平台的文件夹');
+assert.match(render({}, {loading:true}),/正在加载内容库/,'首次加载不可误报为空内容库');
+assert.match(render({}, {state:emptyState,connectionError:'offline'}),/内容库暂时无法加载/,'连接失败须有可恢复的错误状态');
 const groups=getLibraryGroups(tasks,creators);
-assert.equal(groups.length,3,'未完成的任务不能创建额外归档文件夹');
+assert.equal(groups.length,3);
 const first=groups.find(group=>group.id==='one');
-assert.deepEqual([first.name,first.tasks.length,first.videos,first.dynamics,first.size],['创作者甲',2,1,1,200],'文件夹应使用最新作者名称，且只统计已完成的归档');
-assert.deepEqual(readRoute(pageHash('library',{platform:'bilibili',creatorId:'one'})),{page:'library',libraryScope:{creatorId:'one',platform:'bilibili'}},'已有订阅卡片的内容库直达链接必须继续定位到对应文件夹');
-console.log('内容库文件夹检查通过：根目录、作者范围、平台、搜索、遗留归档与直达链接');
-
-const publications=[{...task('old','one','UP','bilibili'),publishedAt:'2024-01-01T00:00:00Z'},{...task('missing','one','UP','bilibili')},{...task('new','one','UP','bilibili'),publishedAt:'2026-01-01T00:00:00Z'},{...task('invalid','one','UP','bilibili'),publishedAt:'invalid'}];
-assert.deepEqual(selectLibraryTasks(publications,{sort:'published-new'}).map(t=>t.id),['new','old','missing','invalid'],'最新发布排序必须独立于归档时间，未知日期置后');
-assert.deepEqual(selectLibraryTasks(publications,{sort:'published-old'}).map(t=>t.id),['old','new','missing','invalid'],'最早发布排序仍须把未知日期置后');
-function renderItem(item){return renderToStaticMarkup(React.createElement(AppContext.Provider,{value:{state:{...emptyState,creators,tasks:publications},preview(){}}},React.createElement(LibraryItem,{task:item})));}
-assert.match(renderItem(publications[0]),/发布于 2024/,'发布时间必须显示年份以区分跨年内容');
-assert.match(renderItem(publications[1]),/发布时间待补齐/,'缺失发布时间必须明确显示');
-console.log('发布时间排序检查通过：正序、倒序、缺失与无效日期');
+assert.deepEqual([first.name,first.tasks.length,first.videos,first.dynamics,first.size],['创作者甲',2,1,1,200]);
+assert.equal(selectLibraryTasks(tasks,{query:'创作者甲'},creators).length,2,'搜索须使用最新作者名');
+assert.equal(selectLibraryTasks(tasks,{platform:'xiaohongshu'}).length,1);
+assert.equal(selectLibraryTasks(tasks,{creatorId:'one',kind:'image_post'}).length,1);
+const route=pageHash('library',{platform:'bilibili',creatorId:'one',view:'creators'});
+assert.deepEqual(readRoute(route),{page:'library',libraryScope:{creatorId:'one',platform:'bilibili',view:'creators'}},'作者直达链接须保留同面板视图');
+assert.equal(readRoute(pageHash('library',{view:'creators'})).libraryScope.view,'creators','Tab 状态须可刷新和后退恢复');
+const publications=[{...task('old','one','UP','bilibili'),publishedAt:'2024-01-01T00:00:00Z'},{...task('missing','one','UP','bilibili')},{...task('new','one','UP','bilibili'),publishedAt:'2026-10-22T00:00:00Z'},{...task('invalid','one','UP','bilibili'),publishedAt:'invalid'}];
+assert.deepEqual(selectLibraryTasks(publications,{sort:'published-new'}).map(t=>t.id),['new','old','missing','invalid']);
+assert.deepEqual(selectLibraryTasks(publications,{sort:'published-old'}).map(t=>t.id),['old','new','missing','invalid']);
+assert.deepEqual(selectLibraryTasks(publications,{dateRange:'7d'},[],Date.parse('2026-10-23T00:00:00Z')).map(t=>t.id),['new'],'时间筛选只匹配有效发布时间');
+const item=renderToStaticMarkup(React.createElement(AppContext.Provider,{value:model()},React.createElement(LibraryItem,{task:{...publications[0],content:'这是一段归档正文摘要'}})));
+assert.match(item,/发布于 2024/);
+assert.match(item,/这是一段归档正文摘要/,'卡片应显示正文摘要');
+assert.ok(!item.includes('/archive/'),'服务器路径应收进详情，不能占满内容卡片');
+console.log('内容库检查通过：共享视图、作者范围、路由恢复、筛选、统计、加载错误态与卡片信息');

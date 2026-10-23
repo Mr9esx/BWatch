@@ -1,4 +1,4 @@
-.media-info h3,.media-audio h4{font-size:14px;font-weight:700;color:var(--ink)}
+.media-info h3,.media-audio h4{font-size:14px;font-weight:600;color:var(--ink)}
 .media-facts{display:flex;flex-direction:column;gap:9px;margin:4px 0;font-size:13px;line-height:1.6}
 .media-facts>div{display:grid;grid-template-columns:76px minmax(0,1fr);gap:10px}
 .media-facts dt{color:var(--muted)}

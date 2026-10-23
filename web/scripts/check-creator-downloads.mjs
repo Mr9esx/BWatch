@@ -20,17 +20,17 @@ for(const kind of ['video','image_post']){
 }
 assert.match(renderToStaticMarkup(React.createElement(Thumbnail,{task:{...task('pending','queued'),thumbnail:'https://example.invalid/remote.jpg'}})),/src="https:\/\/example\.invalid\/remote.jpg"/,'未下载任务仍可使用平台预览图');
 assert.match(renderToStaticMarkup(React.createElement(Thumbnail,{task:task('no-remote','completed')})),/src="\/api\/tasks\/no-remote\/thumbnail"/,'即使没有远端缩略图地址也应尝试已下载封面');
-function render(tasks,extra={},Component=Creators){
+function render(tasks,extra={},Component=Creators,scope={}){
  const state={...emptyState,creators:[creator],tasks,...extra};
- const model={state,health:null,search:'',setSearch(){},page:'creators',libraryScope:{creatorId:null,platform:'all'},navigate(){},openAdd(){},act:async()=>true,preview(){},notify(){},confirm(){}};
+ const model={state,health:null,search:'',setSearch(){},page:'creators',libraryScope:{creatorId:null,platform:'all',view:'all',...scope},navigate(){},openAdd(){},act:async()=>true,preview(){},notify(){},confirm(){}};
  return renderToStaticMarkup(React.createElement(AppContext.Provider,{value:model},React.createElement(Component)));
 }
 const localTask={...task('本地视频','completed'),file:'/server/downloads/测试 UP/很长的文件名.mp4'};
-const library=render([localTask],{},Library);
+const library=render([localTask],{},Library,{view:'creators'});
 const libraryItem=render([localTask],{},()=>React.createElement(LibraryItem,{task:localTask}));
 assert.match(library,/href="#library\?creator=one"/,'内容库根目录应通过创作者文件夹进入归档');
-assert.match(libraryItem,/\/server\/downloads\/测试 UP\/很长的文件名.mp4/,'内容库应直接展示实际服务器文件路径');
-assert.match(libraryItem,/复制保存路径/,'保存路径应有明确复制入口');
+assert.doesNotMatch(libraryItem,/\/server\/downloads/,'内容卡片不应被服务器路径占满');
+assert.match(libraryItem,/查看详情/,'卡片应有明确的详情入口以查看文件信息');
 const libraryTasks=[{...task('older','completed'),finishedAt:'2026-10-17T00:00:00Z',bytes:100},{...task('newer','completed'),finishedAt:'2026-10-18T00:00:00Z',bytes:50,kind:'image_post',content:'正文关键词'},{...task('orphan','completed','removed'),creatorName:'已移除的 UP',file:'/server/orphan.mp4',bytes:300},task('still-running','downloading')];
 const grouped=getLibraryGroups(libraryTasks,[creator]);
 assert.deepEqual(getLibraryGroups(libraryTasks,[creator],'size').map(group=>group.id),['removed','one'],'分类的占用排序应按该 UP 主归档总大小排序');

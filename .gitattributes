@@ -1,0 +1,3 @@
+# Preserve upstream font license text, including its original whitespace.
+docs/branding/fonts/*-OFL.txt -whitespace
+web/public/fonts/*-OFL.txt -whitespace

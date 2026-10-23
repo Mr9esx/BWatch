@@ -13,7 +13,7 @@ export function PlatformBadge({platform}:{platform?:Platform}){return <Chip as="
 export function FilterSelect<T extends string>({value,onChange,label,id,options}:{value:T;onChange:(value:T)=>void;label:string;id?:string;options:readonly {key:T;label:string}[]}){return <Select id={id} aria-label={label} variant="bordered" disallowEmptySelection fullWidth={false} selectedKeys={[value]} onSelectionChange={keys=>{if(keys!=='all'){const key=keys.values().next().value;if(key!==undefined)onChange(String(key) as T)}}} classNames={{base:'filter-select',trigger:'filter-select-trigger',value:'filter-select-value'}}>{options.map(option=><SelectItem key={option.key} textValue={option.label}>{option.label}</SelectItem>)}</Select>}
 export function PlatformSelect({value,onChange,label='筛选内容平台',id}:{value:PlatformFilter;onChange:(platform:PlatformFilter)=>void;label?:string;id?:string}){return <FilterSelect id={id} label={label} value={value} onChange={onChange} options={[{key:'all',label:'全部平台'},...platforms.map(platform=>({key:platform.id,label:platform.label}))]}/>}
 
-export function Logo(){return <span className="brand-mark" aria-hidden="true"><img src="/hamster-logo-bold.png" alt="" width={28} height={28} draggable={false}/></span>}
+export function Logo(){return <span className="brand-mark" aria-hidden="true"><img src="/hozon-mark.png" alt="" width={34} height={34} draggable={false}/></span>}
 const colors=['purple','blue','orange','green','pink'];
 export function Avatar({name,src,index=0,small=false}:{name:string;src?:string;index?:number;small?:boolean}){
  const [failed,setFailed]=useState(false);useEffect(()=>setFailed(false),[src]);

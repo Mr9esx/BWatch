@@ -56,9 +56,11 @@ export function CreatorDownloadSummary({creator,onOpenDownloads}:{creator:Creato
   const next=state.tasks.find(task=>task.creatorId===creator.id&&task.status==='queued')!;
   const now=Date.now();
   const bilibili=isBilibiliTask(next);
-  const nextAt=Math.max(Date.parse(state.nextDownloadAt||'')||0,bilibili?(Date.parse(state.bilibiliBlockedUntil||'')||0):0);
+  const platform=next.platform;
+  const policy=state.settings.downloadPolicies?.[platform]||{concurrency:state.settings.concurrency,minInterval:1,maxInterval:3};
+  const nextAt=Math.max(Date.parse(state.nextPlatformDownloadAt?.[platform]||'')||0,Date.parse(state.platformCooldowns?.[platform]||'')||0,bilibili?(Date.parse(state.bilibiliBlockedUntil||'')||0):0);
   const earlier=state.tasks.slice(0,state.tasks.indexOf(next)).some(task=>task.status==='queued');
-  const busy=state.tasks.filter(task=>task.status==='downloading').length>=state.settings.concurrency;
+  const busy=state.tasks.filter(task=>task.status==='downloading'&&task.platform===platform).length>=policy.concurrency;
   const waiting=state.paused?'调度已暂停 · 恢复后按序下载'
    :nextAt>now?`最早 ${scheduleTime(new Date(nextAt).toISOString())} 开始${earlier?' · 前序任务优先':busy?' · 等待下载位空闲':''}`
    :earlier?'等待前序任务，按序开始'
