@@ -1,4 +1,5 @@
 import {useCallback,useEffect,useRef,useState} from 'react';
+import {AnimatePresence,motion,useReducedMotion} from 'framer-motion';
 import {Button,Input,Modal,ModalBody,ModalContent,ModalFooter,ModalHeader,Select,SelectItem} from '@heroui/react';
 import {ArrowDownToLine,Check,ChevronLeft,ChevronRight,Clapperboard,ExternalLink,FileText,FolderHeart,LayoutDashboard,Menu,Plus,RefreshCw,Settings,Terminal,TriangleAlert,Users,X,PanelsTopLeft} from 'lucide-react';
 import {request} from './api';
@@ -6,9 +7,10 @@ import {pageHash,readRoute,type LibraryDestination} from './navigation';
 import {AppContext} from './context';
 import type {CreatorInput,Health,Page,State,Task} from './types';
 import {emptyState} from './types';
-import {bytes,CountBadge,Empty,ErrorNote,FileLocation,Kind,Logo,PlatformBadge,quality,Status} from './components';
+import {bytes,dateTime,CountBadge,Empty,ErrorNote,FileLocation,Kind,Logo,PlatformBadge,quality,Status} from './components';
 import Dashboard from './Dashboard';
 import ImageViewer from './ImageViewer';
+import MediaInfo from './MediaInfo';
 import PlatformManagement from './PlatformManagement';
 import {Creators,Library,Tasks} from './ContentPages';
 import {Logs,SettingsPage} from './SystemPages';
@@ -16,6 +18,7 @@ import {Logs,SettingsPage} from './SystemPages';
 const nav=[{id:'overview',label:'工作台',icon:LayoutDashboard},{id:'creators',label:'创作者订阅',icon:Users},{id:'platforms',label:'平台管理',icon:PanelsTopLeft},{id:'tasks',label:'下载任务',icon:ArrowDownToLine},{id:'library',label:'内容库',icon:FolderHeart},{id:'logs',label:'运行日志',icon:Terminal},{id:'settings',label:'偏好设置',icon:Settings}] as const;
 type Confirmation={title:string;description:string;action:()=>Promise<boolean>};
 export default function App(){
+ const reducedMotion=useReducedMotion();const [previewLayoutId,setPreviewLayoutId]=useState<string>();
  const [route,setRoute]=useState(()=>readRoute(location.hash));const {page,libraryScope}=route;
  const [state,setState]=useState<State>(emptyState);
  const [imageIndex,setImageIndex]=useState<number|null>(null);
@@ -39,7 +42,7 @@ export default function App(){
  useEffect(()=>{let active=true;async function poll(){try{const [s,h]=await Promise.all([request<State>('/state'),request<Health>('/health')]);if(active){setState(s);setHealth(h);setConnectionError('')}}catch(e){if(active)setConnectionError(e instanceof Error?e.message:'无法连接服务')}}void poll();const timer=setInterval(poll,3000);return()=>{active=false;clearInterval(timer)}},[]);
  useEffect(()=>{const onHash=()=>{setRoute(readRoute(location.hash));setSearch('')};window.addEventListener('hashchange',onHash);return()=>window.removeEventListener('hashchange',onHash)},[]);
  useEffect(()=>{const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'){if(!sidebarOpen&&!selected&&!confirmation&&!addOpen)setSearch('');setSidebarOpen(false)}};window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey)},[sidebarOpen,selected,confirmation,addOpen]);
- const navigate=(p:Page,destination:LibraryDestination={})=>{const hash=pageHash(p,destination);setRoute(readRoute(hash));setSearch('');setSidebarOpen(false);location.hash=hash;window.scrollTo({top:0,behavior:'smooth'})};
+ const navigate=(p:Page,destination:LibraryDestination={})=>{const hash=pageHash(p,destination);setRoute(readRoute(hash));setSearch('');setSidebarOpen(false);location.hash=hash;if(p!=='library')window.scrollTo({top:0,behavior:'smooth'})};
  const act=async(path:string,method='POST',body?:unknown,message?:string)=>{
   try{
    await request(path,method,body);await refresh();if(message)notify(message);return true;
@@ -48,7 +51,7 @@ export default function App(){
  const active=state.tasks.filter(t=>t.status==='downloading').length;
  const previewTask=selected?(state.tasks.find(t=>t.id===selected.id)||selected):null;
  const previewImages=previewTask?.kind==='image_post'&&previewTask.status==='completed'?(previewTask.files||[]).map((_,index)=>`/api/tasks/${encodeURIComponent(previewTask.id)}/files/${index+1}`):[];
- return <AppContext.Provider value={{state,health,search,setSearch,page,libraryScope,navigate,openAdd:()=>setAddOpen(true),act,preview:setSelected,notify,confirm:(title,description,action)=>setConfirmation({title,description,action})}}>
+ return <AppContext.Provider value={{state,health,search,setSearch,page,libraryScope,navigate,openAdd:()=>setAddOpen(true),act,preview:(task,layoutId)=>{setPreviewLayoutId(layoutId);setSelected(task)},notify,confirm:(title,description,action)=>setConfirmation({title,description,action})}}>
   <div className="app-shell">
    {sidebarOpen&&<button className="sidebar-backdrop" aria-label="关闭导航" onClick={()=>setSidebarOpen(false)}/>}
    <aside ref={navigationRef} id="primary-navigation" role={sidebarOpen?'dialog':undefined} aria-modal={sidebarOpen||undefined} aria-label="站点导航" className={`sidebar ${sidebarOpen?'open':''}`}><a className="brand" href="#overview" onClick={e=>{e.preventDefault();navigate('overview')}}><Logo/><span>Bili<span>Fetch</span></span></a><button type="button" className="sidebar-close" aria-label="关闭导航" onClick={()=>setSidebarOpen(false)}><X size={18}/></button><nav aria-label="主导航">{nav.map(n=><button key={n.id} onClick={()=>navigate(n.id)} className={`nav-item ${page===n.id?'active':''}`} aria-current={page===n.id?'page':undefined}><n.icon size={19}/><span>{n.label}</span>{n.id==='tasks'&&active>0?<CountBadge count={active} label={`${active} 个下载中任务`}/>:n.id==='creators'&&state.creators.length>0?<CountBadge count={state.creators.length} label={`${state.creators.length} 个订阅`}/>:null}</button>)}</nav><div className="sidebar-bottom"><div className="service-status"><span className={connectionError?'gray-dot':'green-dot'}/><span>{connectionError?'服务未连接':state.paused?'调度已暂停':'服务运行中'}</span></div></div></aside>
@@ -59,8 +62,8 @@ export default function App(){
    </div>
   </div>
   <AddCreatorModal isOpen={addOpen} onClose={()=>setAddOpen(false)} onManage={()=>{setAddOpen(false);navigate('platforms')}} settings={state.settings} onSubmit={async input=>{await request('/creators','POST',input);setAddOpen(false);notify('订阅已添加');void refresh().catch(()=>{})}}/>
-  <Modal isOpen={!!previewTask} onClose={()=>{setImageIndex(null);setSelected(null)}} size="5xl" scrollBehavior="inside" classNames={{base:'app-modal preview-modal',header:'modal-header'}}>
-   <ModalContent>
+  <Modal isOpen={!!previewTask} onClose={()=>{setImageIndex(null);setSelected(null)}} disableAnimation={!!reducedMotion} motionProps={previewLayoutId?{initial:false,animate:{opacity:1},exit:{opacity:0},transition:{duration:.34}}:undefined} size="5xl" scrollBehavior="inside" classNames={{base:'app-modal preview-modal',header:'modal-header'}}>
+   <ModalContent as={motion.div} {...{layoutId:reducedMotion?undefined:previewLayoutId,layoutRoot:true,transition:{layout:{duration:.38,ease:[.22,1,.36,1]}},style:{borderRadius:6}}}>
     {previewTask&&<>
      <ModalHeader className="preview-header">
       <div className="preview-heading">
@@ -75,7 +78,9 @@ export default function App(){
       <aside className="preview-details">
        {previewTask.error&&<ErrorNote>{previewTask.error}</ErrorNote>}
        <div className="preview-detail-block"><span className="preview-detail-label">创作者</span><strong>{previewTask.creatorName}</strong></div>
+       <div className="preview-detail-block"><span className="preview-detail-label">发布时间</span>{previewTask.publishedAt?<time dateTime={previewTask.publishedAt}>{dateTime(previewTask.publishedAt,true)}</time>:<><span className="muted">暂未获取</span><Button size="sm" variant="bordered" onPress={()=>act(`/tasks/${previewTask.id}/publication`,'POST',undefined,'发布时间已补齐')}>补齐发布时间</Button></>}</div>
        <div className="preview-detail-block"><span className="preview-detail-label">内容信息</span><div className="preview-detail-facts"><span>{bytes(previewTask.bytes)}</span>{previewTask.kind==='video'&&<span>{quality(previewTask.quality)}</span>}</div></div>
+       {previewTask.status==='completed'&&(previewTask.kind==='video'||previewImages.length>0)&&<MediaInfo taskId={previewTask.id} index={previewTask.kind==='video'?0:previewImageIndex+1} kind={previewTask.kind}/>}
        {previewTask.status==='completed'&&<details className="preview-file-details"><summary>文件信息与保存路径</summary><FileLocation task={previewTask}/></details>}
       </aside>
      </ModalBody>
@@ -88,7 +93,7 @@ export default function App(){
   </Modal>
   <ImageViewer sources={previewImages} index={imageIndex} title={previewTask?.title||''} onIndexChange={i=>{setImageIndex(i);setPreviewImageIndex(i)}} onClose={()=>setImageIndex(null)}/>
   <Modal isOpen={!!confirmation} onClose={()=>setConfirmation(null)} size="md" classNames={{base:'app-modal'}}><ModalContent><ModalHeader>{confirmation?.title}</ModalHeader><ModalBody data-slot="body"><p className="muted">{confirmation?.description}</p></ModalBody><ModalFooter data-slot="footer"><Button variant="light" onPress={()=>setConfirmation(null)}>取消</Button><Button color="danger" isLoading={confirmBusy} onPress={async()=>{if(!confirmation)return;setConfirmBusy(true);if(await confirmation.action())setConfirmation(null);setConfirmBusy(false)}}>确认移除</Button></ModalFooter></ModalContent></Modal>
-  {toast&&<div role={toast.error?'alert':'status'} className={`toast ${toast.error?'toast-error':''}`}>{toast.error?<TriangleAlert size={19}/>:<Check size={19}/>}<span>{toast.message}</span><button aria-label="关闭通知" onClick={()=>setToast(null)}><X size={15}/></button></div>}
+  <AnimatePresence>{toast&&<motion.div key="toast" initial={{opacity:0,y:reducedMotion?0:16}} animate={{opacity:1,y:0}} exit={{opacity:0,y:reducedMotion?0:8}} transition={{duration:reducedMotion?0:.2}} role={toast.error?'alert':'status'} className={`toast ${toast.error?'toast-error':''}`}>{toast.error?<TriangleAlert size={19}/>:<Check size={19}/>}<span>{toast.message}</span><button aria-label="关闭通知" onClick={()=>setToast(null)}><X size={15}/></button></motion.div>}</AnimatePresence>
  </AppContext.Provider>
 }
 

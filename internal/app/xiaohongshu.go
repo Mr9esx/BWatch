@@ -181,38 +181,16 @@ func (b *xhsBrowser) close() {
 	}
 }
 
-func (a *App) Close() { a.xhsBrowser.close() }
-
-func (a *App) StartXHSLogin(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
-	defer cancel()
-	return a.xhsBrowser.login(ctx)
-}
-
-// CaptureXHSLogin is called only while the user is completing an explicit login.
-// It reads the existing browser and never launches one.
-func (a *App) CaptureXHSLogin(ctx context.Context) XHSAccount {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	cookies, err := a.xhsBrowser.cookieSnapshot(ctx)
-	if err != nil {
-		return XHSAccount{State: "unavailable", Message: "读取小红书登录状态失败: " + err.Error()}
+func (a *App) Close() {
+	a.CancelXHSLogin("")
+	a.xhsBrowser.close()
+	if a.stateDB != nil {
+		_ = a.stateDB.Close()
 	}
-	account := xhsAccountFromCookies(cookies)
-	if account.State == "logged_in" {
-		data, err := xhsCookieFileFromCookies(cookies)
-		if err != nil {
-			return XHSAccount{State: "unavailable", Message: "登录已识别，但读取登录凭据失败: " + err.Error()}
-		}
-		if err := a.saveCredential(PlatformXiaohongshu, data); err != nil {
-			return XHSAccount{State: "unavailable", Message: "登录已识别，但加密保存凭据失败: " + err.Error()}
-		}
-		return a.XHSAccount(ctx)
-	}
-	return account
 }
 
 func (a *App) LogoutXHS(ctx context.Context) error {
+	a.CancelXHSLogin("")
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	a.xhsBrowser.mu.Lock()
@@ -307,6 +285,7 @@ func (image xhsImage) archiveURL() string {
 }
 
 type xhsListNote struct {
+	Time         int64      `json:"time"`
 	ID           string     `json:"id"`
 	NoteID       string     `json:"note_id"`
 	XsecToken    string     `json:"xsec_token"`
@@ -379,7 +358,7 @@ func parseXHSListNote(raw json.RawMessage) (Entry, string, string, error) {
 		query.Set("xsec_token", note.XsecToken)
 	}
 	entryURL := "https://www.xiaohongshu.com/explore/" + url.PathEscape(id) + "?" + query.Encode()
-	return Entry{ID: id, Title: title, URL: entryURL, Thumbnail: secureXHSImageURL(cover), Content: note.Desc, Images: images, Kind: kind}, note.User.Nickname, secureXHSImageURL(note.User.Avatar), nil
+	return Entry{PublishedAt: publicationTime(note.Time), ID: id, Title: title, URL: entryURL, Thumbnail: secureXHSImageURL(cover), Content: note.Desc, Images: images, Kind: kind}, note.User.Nickname, secureXHSImageURL(note.User.Avatar), nil
 }
 
 func secureXHSImageURL(raw string) string {

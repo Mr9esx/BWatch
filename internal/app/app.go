@@ -143,6 +143,7 @@ func (a *App) applyScan(creatorID string, entries []Entry, name string, kind Con
 			}
 			count := 0
 			for n, e := range entries {
+				a.fillEntryPublicationLocked(c.ID, kind, e)
 				if e.ID == "" || seen[e.ID] {
 					continue
 				}
@@ -164,7 +165,7 @@ func (a *App) applyScan(creatorID string, entries []Entry, name string, kind Con
 				if title == "" {
 					title = map[ContentKind]string{ContentVideo: "视频 ", ContentImagePost: "图文 "}[kind] + e.ID
 				}
-				a.state.Tasks = append(a.state.Tasks, Task{ID: id(), Platform: c.Platform, CreatorID: c.ID, CreatorName: c.Name, VideoID: e.ID, Kind: kind, Title: title, URL: e.URL, Thumbnail: e.Thumbnail, Duration: e.Duration, Quality: c.Quality, Status: "queued", Content: e.Content, Images: e.Images, CreatedAt: time.Now()})
+				a.state.Tasks = append(a.state.Tasks, Task{PublishedAt: e.PublishedAt, ID: id(), Platform: c.Platform, CreatorID: c.ID, CreatorName: c.Name, VideoID: e.ID, Kind: kind, Title: title, URL: e.URL, Thumbnail: e.Thumbnail, Duration: e.Duration, Quality: c.Quality, Status: "queued", Content: e.Content, Images: e.Images, CreatedAt: time.Now()})
 				count++
 			}
 			if kind == ContentImagePost {

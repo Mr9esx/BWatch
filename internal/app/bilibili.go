@@ -210,12 +210,16 @@ func (a *App) captureVideoMetadata(taskID, path string) {
 	if json.NewDecoder(io.LimitReader(file, 4<<20)).Decode(&info) != nil {
 		return
 	}
+	publishedAt := a.localPublication(Task{Kind: ContentVideo, File: path})
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for i := range a.state.Tasks {
 		t := &a.state.Tasks[i]
 		if t.ID != taskID {
 			continue
+		}
+		if publishedAt != nil {
+			t.PublishedAt = publishedAt
 		}
 		if info.Title != "" {
 			t.Title = info.Title

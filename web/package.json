@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test:downloads": "node scripts/check-creator-downloads.mjs",
-    "test:library": "node scripts/check-library-folders.mjs"
+    "test:library": "node scripts/check-library-folders.mjs",
+    "test:media": "node scripts/check-media-info.mjs",
+    "test:tasks": "node scripts/check-task-rendering.mjs"
   },
   "dependencies": {
     "@heroui/react": "^2.8.10",

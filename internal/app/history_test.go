@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -118,55 +117,29 @@ func readyHistory(t *testing.T, a *App, cid string) {
 	}
 }
 
-func TestBilibiliPacingAndGlobalConcurrency(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "downloader")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\nsleep 20\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	a, err := New(t.TempDir(), t.TempDir(), binary)
+func TestDownloadBatchWaitSurvivesRestart(t *testing.T) {
+	dataDir, downloads := t.TempDir(), t.TempDir()
+	a, err := New(dataDir, downloads, "yt-dlp")
 	if err != nil {
 		t.Fatal(err)
 	}
-	useTestCookies(t, a)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer func() {
-		cancel()
-		d, stop := context.WithTimeout(context.Background(), 3*time.Second)
-		defer stop()
-		if err := a.Drain(d); err != nil {
-			t.Error(err)
-		}
-	}()
-	if err = a.transaction(func() error {
-		a.state.Settings.Concurrency = 2
-		a.state.Tasks = []Task{{ID: "b1", Kind: "video", URL: "https://www.bilibili.com/video/BV1", Status: "queued", Quality: "best"}, {ID: "b2", Kind: "video", URL: "https://www.bilibili.com/video/BV2", Status: "queued", Quality: "best"}}
+	if err := a.transaction(func() error {
+		a.state.Settings.Concurrency = 4
+		next := time.Now().Add(time.Minute)
+		a.state.NextDownloadAt, a.state.NextBilibiliDownloadAt = &next, &next
+		a.state.Tasks = []Task{{ID: "waiting", Platform: PlatformBilibili, Kind: ContentVideo, Status: "queued"}}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	before := time.Now()
-	if !a.startNext(ctx) || a.startNext(ctx) {
-		t.Fatal("随机间隔期间不能同时启动第二条 B 站任务")
-	}
-	s := a.Snapshot()
-	if s.NextBilibiliDownloadAt == nil || s.NextBilibiliDownloadAt.Before(before.Add(time.Minute)) || s.NextBilibiliDownloadAt.After(time.Now().Add(3*time.Minute)) {
-		t.Fatal("应持久化 1–3 分钟随机间隔")
-	}
-	if err = a.transaction(func() error {
-		a.state.Tasks = append(a.state.Tasks, Task{ID: "y1", Kind: "video", URL: "https://www.youtube.com/watch?v=x", Status: "queued", Quality: "best"}, Task{ID: "y2", Kind: "video", URL: "https://www.youtube.com/watch?v=y", Status: "queued", Quality: "best"})
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if !a.startNext(ctx) || a.startNext(ctx) {
-		t.Fatal("B站间隔不阻塞其他平台，但必须遵守总并发上限")
-	}
-	b, err := New(filepath.Dir(a.statePath), a.downloadDir, binary)
+	a.Close()
+	b, err := New(dataDir, downloads, "yt-dlp")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !future(b.Snapshot().NextBilibiliDownloadAt, time.Now()) {
-		t.Fatal("重启不能清空下载等待时间")
+	defer b.Close()
+	if !future(b.Snapshot().NextDownloadAt, time.Now()) || b.startNext(context.Background()) {
+		t.Fatal("重启后仍须等待下一批，不能直接启动任务")
 	}
 }
 

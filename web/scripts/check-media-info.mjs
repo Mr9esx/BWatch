@@ -1,0 +1,24 @@
+import assert from 'node:assert/strict';
+import {mkdir} from 'node:fs/promises';
+import {fileURLToPath,pathToFileURL} from 'node:url';
+import {dirname,join} from 'node:path';
+import {build} from 'esbuild';
+import React from 'react';
+import {renderToStaticMarkup} from 'react-dom/server';
+
+const root=dirname(dirname(fileURLToPath(import.meta.url)));
+const output=join(root,'node_modules/.cache/media-info/check.mjs');
+await mkdir(dirname(output),{recursive:true});
+await build({stdin:{contents:"export {MediaFacts} from './src/MediaInfo';",resolveDir:root},outfile:output,bundle:true,platform:'node',format:'esm',packages:'external',jsx:'automatic',logLevel:'error'});
+const {MediaFacts}=await import(pathToFileURL(output));
+const info={fileName:'clip.mp4',format:'mov,mp4,m4a,3gp,3g2,mj2',size:1048576,duration:65,bitRate:2500000,video:{codec:'h264',profile:'High',width:1920,height:1080,frameRate:29.97002997,pixelFormat:'yuv420p',bitRate:2300000},audio:[{codec:'aac',sampleRate:48000,channels:2,channelLayout:'stereo',bitRate:192000}]};
+const render=(data,kind='video')=>renderToStaticMarkup(React.createElement(MediaFacts,{info:data,kind}));
+const video=render(info);
+for(const value of ['clip.mp4','H264','1920 × 1080','29.97 fps','2.50 Mbps','AAC','48 kHz','192 kbps','stereo','1:05'])assert.ok(video.includes(value),`视频详情缺少真实参数 ${value}`);
+assert.match(render({...info,audio:[]}),/无音轨/,'无声视频必须明确显示无音轨');
+const image=render({...info,fileName:'photo.png',format:'png_pipe',duration:0,bitRate:0,video:{codec:'png',width:640,height:480,pixelFormat:'rgba'},audio:[]},'image_post');
+for(const value of ['photo.png','PNG','640 × 480','rgba','1.0 MB'])assert.ok(image.includes(value),`图片详情缺少参数 ${value}`);
+assert.ok(!image.includes('fps')&&!image.includes('无音轨')&&!image.includes('码率'),'静态图片不应显示视频音频参数');
+const unknown=render({fileName:'unknown.mp4',format:'mp4',size:1,audio:[]});
+assert.ok(unknown.includes('未提供')&&!unknown.includes('NaN')&&!unknown.includes('Infinity'),'未知参数必须明确标注且不能显示无效数字');
+console.log('媒体信息展示检查通过：视频、音轨、图片与缺失参数');

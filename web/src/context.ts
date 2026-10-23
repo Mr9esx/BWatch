@@ -1,6 +1,6 @@
 import {createContext,useContext} from 'react';
 import type {State,Health,Page,Task} from './types';
 import type {LibraryDestination,LibraryScope} from './navigation';
-export type AppModel={state:State;health:Health|null;search:string;setSearch:(value:string)=>void;page:Page;libraryScope:LibraryScope;navigate:(page:Page,destination?:LibraryDestination)=>void;openAdd:()=>void;act:(path:string,method?:string,body?:unknown,message?:string)=>Promise<boolean>;preview:(task:Task)=>void;notify:(message:string,error?:boolean)=>void;confirm:(title:string,description:string,action:()=>Promise<boolean>)=>void};
+export type AppModel={state:State;health:Health|null;search:string;setSearch:(value:string)=>void;page:Page;libraryScope:LibraryScope;navigate:(page:Page,destination?:LibraryDestination)=>void;openAdd:()=>void;act:(path:string,method?:string,body?:unknown,message?:string)=>Promise<boolean>;preview:(task:Task,layoutId?:string)=>void;notify:(message:string,error?:boolean)=>void;confirm:(title:string,description:string,action:()=>Promise<boolean>)=>void};
 export const AppContext=createContext<AppModel|null>(null);
 export function useApp(){const value=useContext(AppContext);if(!value)throw new Error('App context missing');return value;}

@@ -174,7 +174,8 @@ func (a *App) scanVideos(ctx context.Context, c Creator, s Settings) ([]Entry, s
 			Thumbnails []struct {
 				URL string `json:"url"`
 			} `json:"thumbnails"`
-			Duration float64 `json:"duration"`
+			Timestamp float64 `json:"timestamp"`
+			Duration  float64 `json:"duration"`
 		} `json:"entries"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &data); err != nil {
@@ -193,7 +194,7 @@ func (a *App) scanVideos(ctx context.Context, c Creator, s Settings) ([]Entry, s
 		if thumbnail == "" && len(e.Thumbnails) > 0 {
 			thumbnail = e.Thumbnails[0].URL
 		}
-		entries = append(entries, Entry{ID: e.ID, Title: e.Title, URL: videoURL, Thumbnail: thumbnail, Duration: e.Duration})
+		entries = append(entries, Entry{PublishedAt: publicationTime(int64(e.Timestamp)), ID: e.ID, Title: e.Title, URL: videoURL, Thumbnail: thumbnail, Duration: e.Duration})
 	}
 	name := data.Uploader
 	if name == "" {
@@ -325,6 +326,9 @@ func (a *App) downloadVideo(ctx context.Context, t Task, s Settings) (string, []
 		return "", nil, 0, err
 	}
 	a.captureVideoMetadata(t.ID, safe)
+	if platform == PlatformXiaohongshu && t.PublishedAt == nil {
+		_, _ = a.RefreshTaskPublication(ctx, t.ID)
+	}
 	return safe, nil, info.Size(), nil
 }
 func (a *App) safeFile(path string) (string, error) {
@@ -346,21 +350,30 @@ func (a *App) safeFile(path string) (string, error) {
 	}
 	return absolute, nil
 }
+
+// 到达启动间隔后，一次认领当前空位数量的任务，共用下一批的等待时间。
 func (a *App) startNext(ctx context.Context) bool {
-	var task Task
+	type download struct {
+		task   Task
+		ctx    context.Context
+		cancel context.CancelFunc
+	}
+	var batch []download
 	var settings Settings
-	var cancel context.CancelFunc
-	var taskCtx context.Context
 	err := a.transaction(func() error {
-		if a.state.Paused || len(a.running) >= a.state.Settings.Concurrency {
+		now := time.Now()
+		if a.state.Paused || len(a.running) >= a.state.Settings.Concurrency || future(a.state.NextDownloadAt, now) {
 			return nil
 		}
+		settings = a.state.Settings
 		for i := range a.state.Tasks {
+			if len(a.running) >= settings.Concurrency {
+				break
+			}
 			t := &a.state.Tasks[i]
 			if t.Status != "queued" || a.running[t.ID] != nil {
 				continue
 			}
-			now := time.Now()
 			platform := t.Platform
 			if platform == "" {
 				if isBilibiliTask(*t) {
@@ -369,53 +382,50 @@ func (a *App) startNext(ctx context.Context) bool {
 					platform = PlatformXiaohongshu
 				}
 			}
-			if future(a.state.NextDownloadAt, now) || future(a.platformBlockedUntilLocked(platform), now) {
+			if future(a.platformBlockedUntilLocked(platform), now) {
 				continue
 			}
-			next := now.Add(jitter(time.Duration(a.state.Settings.DownloadMinInterval)*time.Minute, time.Duration(a.state.Settings.DownloadMaxInterval)*time.Minute))
-			a.state.NextDownloadAt = &next
-			a.state.NextBilibiliDownloadAt = &next
 			t.Status = "downloading"
-			t.Speed = ""
-			t.Error = ""
-			task = *t
-			settings = a.state.Settings
-			taskCtx, cancel = context.WithCancel(ctx)
+			t.Speed, t.Error = "", ""
+			taskCtx, cancel := context.WithCancel(ctx)
 			a.running[t.ID] = cancel
-			return nil
+			batch = append(batch, download{task: *t, ctx: taskCtx, cancel: cancel})
+		}
+		if len(batch) > 0 {
+			next := now.Add(jitter(time.Duration(settings.DownloadMinInterval)*time.Minute, time.Duration(settings.DownloadMaxInterval)*time.Minute))
+			a.state.NextDownloadAt, a.state.NextBilibiliDownloadAt = &next, &next
 		}
 		return nil
 	})
 	if err != nil {
-		if cancel != nil {
-			cancel()
-			a.mu.Lock()
-			delete(a.running, task.ID)
-			a.mu.Unlock()
-		}
-		log.Printf("认领任务失败: %v", err)
-		return false
-	}
-	if task.ID == "" {
-		return false
-	}
-	go func() {
-		defer cancel()
-		var file string
-		var files []string
-		var size int64
-		var err error
-		if task.Kind == "image_post" {
-			file, files, size, err = a.downloadDynamic(taskCtx, task)
-		} else {
-			file, files, size, err = a.downloadVideo(taskCtx, task, settings)
-		}
-		a.finishTask(ctx, task, file, files, size, err)
 		a.mu.Lock()
-		delete(a.running, task.ID)
+		for _, item := range batch {
+			item.cancel()
+			delete(a.running, item.task.ID)
+		}
 		a.mu.Unlock()
-	}()
-	return true
+		log.Printf("认领下载批次失败: %v", err)
+		return false
+	}
+	for _, item := range batch {
+		go func() {
+			defer item.cancel()
+			var file string
+			var files []string
+			var size int64
+			var err error
+			if item.task.Kind == "image_post" {
+				file, files, size, err = a.downloadDynamic(item.ctx, item.task)
+			} else {
+				file, files, size, err = a.downloadVideo(item.ctx, item.task, settings)
+			}
+			a.finishTask(ctx, item.task, file, files, size, err)
+			a.mu.Lock()
+			delete(a.running, item.task.ID)
+			a.mu.Unlock()
+		}()
+	}
+	return len(batch) > 0
 }
 
 // Keep the result in memory until it has been committed. A transient disk error

@@ -81,8 +81,9 @@ type dynamicItem struct {
 	Type    string `json:"type"`
 	Modules struct {
 		Author struct {
-			Name string `json:"name"`
-			Face string `json:"face"`
+			PubTS int64  `json:"pub_ts"`
+			Name  string `json:"name"`
+			Face  string `json:"face"`
 		} `json:"module_author"`
 		Dynamic dynamicModule `json:"module_dynamic"`
 	} `json:"modules"`
@@ -111,9 +112,10 @@ func (item *dynamicItem) UnmarshalJSON(data []byte) error {
 	}
 	var modules []struct {
 		Author *struct {
-			Name string `json:"name"`
-			Face string `json:"face"`
-			User struct {
+			PubTS int64  `json:"pub_ts"`
+			Name  string `json:"name"`
+			Face  string `json:"face"`
+			User  struct {
 				Name string `json:"name"`
 				Face string `json:"face"`
 			} `json:"user"`
@@ -133,6 +135,7 @@ func (item *dynamicItem) UnmarshalJSON(data []byte) error {
 	}
 	for _, m := range modules {
 		if m.Author != nil {
+			item.Modules.Author.PubTS = m.Author.PubTS
 			item.Modules.Author.Name = m.Author.Name
 			item.Modules.Author.Face = m.Author.Face
 			if m.Author.User.Name != "" {
@@ -270,7 +273,7 @@ func parseBilibiliFeed(r io.Reader) (bilibiliFeed, error) {
 				if strings.HasPrefix(cover, "http://") {
 					cover = "https://" + strings.TrimPrefix(cover, "http://")
 				}
-				out.Videos = append(out.Videos, Entry{ID: video.BVID, Title: video.Title, URL: "https://www.bilibili.com/video/" + video.BVID, Thumbnail: cover, Duration: duration})
+				out.Videos = append(out.Videos, Entry{PublishedAt: publicationTime(item.Modules.Author.PubTS), ID: video.BVID, Title: video.Title, URL: "https://www.bilibili.com/video/" + video.BVID, Thumbnail: cover, Duration: duration})
 			}
 			continue
 		}
@@ -285,7 +288,7 @@ func parseBilibiliFeed(r io.Reader) (bilibiliFeed, error) {
 		if len(images) > 0 {
 			thumbnail = images[0]
 		}
-		out.Dynamics = append(out.Dynamics, Entry{ID: item.ID, Title: title, Content: content, Images: images, Thumbnail: thumbnail, URL: "https://t.bilibili.com/" + item.ID})
+		out.Dynamics = append(out.Dynamics, Entry{PublishedAt: publicationTime(item.Modules.Author.PubTS), ID: item.ID, Title: title, Content: content, Images: images, Thumbnail: thumbnail, URL: "https://t.bilibili.com/" + item.ID})
 	}
 	return out, nil
 }
@@ -455,6 +458,9 @@ func (a *App) downloadDynamic(ctx context.Context, t Task) (string, []string, in
 	files := []string{}
 	var total int64
 	markdown := "# " + t.Title + "\n\n" + t.Content + "\n\n原文：" + t.URL + "\n"
+	if t.PublishedAt != nil {
+		markdown += "\n发布时间：" + t.PublishedAt.Format(time.RFC3339) + "\n"
+	}
 	for i, raw := range t.Images {
 		if i >= 30 {
 			return "", nil, 0, errors.New("单条动态图片超过 30 张，已停止归档")

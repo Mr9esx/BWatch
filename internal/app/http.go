@@ -43,6 +43,12 @@ func (a *App) serveThumbnail(w http.ResponseWriter, r *http.Request) {
 		if task.ID != r.PathValue("id") || task.Status != "completed" {
 			continue
 		}
+		if task.Kind == ContentVideo && task.Platform == PlatformXiaohongshu {
+			if path, err := a.xhsVideoThumbnail(r.Context(), task); err == nil {
+				http.ServeFile(w, r, path)
+				return
+			}
+		}
 		var candidates []string
 		if task.Kind == "image_post" {
 			if len(task.Files) > 0 {
@@ -75,6 +81,14 @@ func (a *App) serveThumbnail(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) Handler(ctx context.Context, webDir, devOrigin string) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/tasks/{id}/publication", func(w http.ResponseWriter, r *http.Request) {
+		at, err := a.RefreshTaskPublication(r.Context(), r.PathValue("id"))
+		if err != nil {
+			apiError(w, 400, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"publishedAt": at})
+	})
 	mux.HandleFunc("GET /api/metrics", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
@@ -98,15 +112,60 @@ func (a *App) Handler(ctx context.Context, webDir, devOrigin string) http.Handle
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, 200, a.SavedPlatformAccount(platform))
 	})
-	mux.HandleFunc("POST /api/xiaohongshu/login/status", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, 200, a.CaptureXHSLogin(r.Context()))
-	})
 	mux.HandleFunc("POST /api/xiaohongshu/login", func(w http.ResponseWriter, r *http.Request) {
-		if err := a.StartXHSLogin(r.Context()); err != nil {
+		w.Header().Set("Cache-Control", "no-store")
+		status, err := a.StartXHSQRLogin(r.Context())
+		if err != nil {
 			apiError(w, 500, err)
 			return
 		}
+		writeJSON(w, 200, status)
+	})
+	mux.HandleFunc("POST /api/xiaohongshu/login/sms", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		var in struct {
+			Phone string `json:"phone"`
+		}
+		if err := decodeBody(w, r, &in); err != nil {
+			apiError(w, 400, err)
+			return
+		}
+		status, err := a.SendXHSLoginCode(r.Context(), in.Phone)
+		if err != nil {
+			apiError(w, 400, err)
+			return
+		}
+		writeJSON(w, 200, status)
+	})
+	mux.HandleFunc("POST /api/xiaohongshu/login/{id}/poll", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		status, err := a.PollXHSLogin(r.Context(), r.PathValue("id"))
+		if err != nil {
+			apiError(w, 400, err)
+			return
+		}
+		writeJSON(w, 200, status)
+	})
+	mux.HandleFunc("POST /api/xiaohongshu/login/{id}/verify", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		var in struct {
+			Phone string `json:"phone"`
+			Code  string `json:"code"`
+		}
+		if err := decodeBody(w, r, &in); err != nil {
+			apiError(w, 400, err)
+			return
+		}
+		status, err := a.VerifyXHSLoginCode(r.Context(), r.PathValue("id"), in.Phone, in.Code)
+		if err != nil {
+			apiError(w, 400, err)
+			return
+		}
+		writeJSON(w, 200, status)
+	})
+	mux.HandleFunc("POST /api/xiaohongshu/login/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		a.CancelXHSLogin(r.PathValue("id"))
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 	mux.HandleFunc("POST /api/xiaohongshu/logout", func(w http.ResponseWriter, r *http.Request) {
@@ -154,6 +213,7 @@ func (a *App) Handler(ctx context.Context, webDir, devOrigin string) http.Handle
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, a.Snapshot()) })
 	mux.HandleFunc("GET /api/tasks/{id}/archive", a.serveArchive)
 	mux.HandleFunc("GET /api/tasks/{id}/thumbnail", a.serveThumbnail)
+	mux.HandleFunc("GET /api/tasks/{id}/files/{index}/metadata", a.serveMediaMetadata)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		_, ytErr := exec.LookPath(a.binary)
 		_, ffErr := exec.LookPath("ffmpeg")

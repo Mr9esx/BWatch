@@ -1,4 +1,4 @@
-import {Button,Chip,Tooltip} from '@heroui/react';
+import {Button,Chip,Select,SelectItem,Tooltip} from '@heroui/react';
 import {ArrowUpRight,Check,Copy,FileText,Film,Grid2X2,Inbox,List,Maximize2,MoreHorizontal,Play,RefreshCw,Search,TriangleAlert,X} from 'lucide-react';
 import {useEffect,useRef,useState,type ReactNode} from 'react';
 import {useApp} from './context';
@@ -10,7 +10,8 @@ export function FilterButton({children,count,selected,onPress}:{children:ReactNo
 export function ViewSwitch({value,onChange,label}:{value:'grid'|'list';onChange:(value:'grid'|'list')=>void;label:string}){return <div className="view-switch" role="group" aria-label={`${label}显示方式`}><Button type="button" isIconOnly size="sm" variant="light" aria-label={`${label}卡片视图`} aria-pressed={value==='grid'} className={value==='grid'?'active':''} onPress={()=>onChange('grid')}><Grid2X2 size={16}/></Button><Button type="button" isIconOnly size="sm" variant="light" aria-label={`${label}列表视图`} aria-pressed={value==='list'} className={value==='list'?'active':''} onPress={()=>onChange('list')}><List size={16}/></Button></div>}
 export function TaskOrigin({history=false}:{history?:boolean}){return <Chip as="span" size="sm" radius="sm" variant="flat" classNames={{base:'ui-tag task-origin',content:'ui-tag-value'}}>{history?'历史':'订阅'}</Chip>}
 export function PlatformBadge({platform}:{platform?:Platform}){return <Chip as="span" size="sm" radius="sm" variant="flat" classNames={{base:`ui-tag platform-badge ${platform||'unknown'}`,content:'ui-tag-value'}}>{platformLabel(platform)}</Chip>}
-export function PlatformSelect({value,onChange,label='筛选内容平台',id}:{value:PlatformFilter;onChange:(platform:PlatformFilter)=>void;label?:string;id?:string}){return <select id={id} className="filter-select platform-select" aria-label={label} value={value} onChange={event=>onChange(event.target.value as PlatformFilter)}><option value="all">全部平台</option>{platforms.map(platform=><option key={platform.id} value={platform.id}>{platform.label}</option>)}</select>}
+export function FilterSelect<T extends string>({value,onChange,label,id,options}:{value:T;onChange:(value:T)=>void;label:string;id?:string;options:readonly {key:T;label:string}[]}){return <Select id={id} aria-label={label} variant="bordered" disallowEmptySelection fullWidth={false} selectedKeys={[value]} onSelectionChange={keys=>{if(keys!=='all'){const key=keys.values().next().value;if(key!==undefined)onChange(String(key) as T)}}} classNames={{base:'filter-select',trigger:'filter-select-trigger',value:'filter-select-value'}}>{options.map(option=><SelectItem key={option.key} textValue={option.label}>{option.label}</SelectItem>)}</Select>}
+export function PlatformSelect({value,onChange,label='筛选内容平台',id}:{value:PlatformFilter;onChange:(platform:PlatformFilter)=>void;label?:string;id?:string}){return <FilterSelect id={id} label={label} value={value} onChange={onChange} options={[{key:'all',label:'全部平台'},...platforms.map(platform=>({key:platform.id,label:platform.label}))]}/>}
 
 export function Logo(){return <span className="brand-mark" aria-hidden="true"><img src="/hamster-logo-bold.png" alt="" width={28} height={28} draggable={false}/></span>}
 const colors=['purple','blue','orange','green','pink'];
@@ -39,14 +40,14 @@ export function Thumbnail({task,onPress}:{task:Task;onPress?:()=>void}){
 export function duration(seconds:number){return `${Math.floor(seconds/60)}:${String(Math.floor(seconds%60)).padStart(2,'0')}`}
 export function bytes(n:number){if(!Number.isFinite(n)||n<=0)return '0 B';const units=['B','KB','MB','GB','TB','PB'];const unit=Math.max(0,Math.min(Math.floor(Math.log(n)/Math.log(1024)),units.length-1));return `${(n/1024**unit).toFixed(unit===0&&n<1?1:unit<2?0:unit===2?1:2)} ${units[unit]}`}
 export function relative(date:string|null){if(!date)return '尚未检查';const min=Math.max(0,Math.floor((Date.now()-new Date(date).getTime())/60000));if(min<1)return '刚刚';if(min<60)return `${min} 分钟前`;if(min<1440)return `${Math.floor(min/60)} 小时前`;return `${Math.floor(min/1440)} 天前`}
-export function dateTime(date:string){return new Date(date).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false})}
+export function dateTime(date:string,includeYear=false){return new Date(date).toLocaleString('zh-CN',{year:includeYear?'numeric':undefined,month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false})}
 export function scheduleTime(date:string){const value=new Date(date);return value.toDateString()===new Date().toDateString()?value.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false}):dateTime(date)}
 export function quality(q:string){return q==='best'?'最佳画质':q==='2160'?'4K':`${q}P`}
 export function External({url}:{url:string}){return <a href={url} target="_blank" rel="noreferrer" className="external" aria-label="打开原文" title="打开原文"><ArrowUpRight size={16}/></a>}
 export {Check,MoreHorizontal,RefreshCw};
 
-export function PageSearch({placeholder}:{placeholder:string}){
- const {search,setSearch}=useApp();const input=useRef<HTMLInputElement>(null);
+export function PageSearch({placeholder,value,onChange}:{placeholder:string;value?:string;onChange?:(value:string)=>void}){
+ const app=useApp();const search=value??app.search;const setSearch=onChange??app.setSearch;const input=useRef<HTMLInputElement>(null);
  useEffect(()=>{const onKey=(event:KeyboardEvent)=>{if((event.metaKey||event.ctrlKey)&&event.key==='k'){event.preventDefault();input.current?.focus()}};window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey)},[]);
- return <div className="page-search" role="search"><Search size={16}/><input ref={input} aria-label={placeholder} placeholder={placeholder} value={search} onChange={event=>setSearch(event.target.value)}/>{search&&<button type="button" aria-label="清空搜索" onClick={()=>{setSearch('');input.current?.focus()}}><X size={15}/></button>}</div>
+ return <div className="page-search" role="search"><Search size={16}/><input ref={input} aria-label={placeholder} placeholder={placeholder} value={search} onChange={event=>setSearch(event.target.value)} onKeyDown={event=>{if(event.key==='Escape')setSearch('')}}/>{search&&<button type="button" aria-label="清空搜索" onClick={()=>{setSearch('');input.current?.focus()}}><X size={15}/></button>}</div>
 }

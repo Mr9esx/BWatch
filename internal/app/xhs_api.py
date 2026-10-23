@@ -99,7 +99,7 @@ def run(request):
             return {"id": str(uid), "redID": str(red_id), "name": str(name), "avatar": avatar}
         if operation == "resolve_creator":
             return resolve_creator(api, request["redID"])
-        if operation == "note_detail":
+        if operation in ("note_detail", "note_publication"):
             note_id = request["noteID"]
             payload = accepted(api.get_note_info(request["url"]))
             items = (payload.get("data") or {}).get("items") or []
@@ -108,6 +108,8 @@ def run(request):
                 raise RuntimeError("笔记详情未返回对应笔记，已停止归档")
             item = matches[0]
             card = item.get("note_card") or {}
+            if operation == "note_publication":
+                return {"time": card.get("time") or 0}
             if card.get("type") != "normal" or not isinstance(card.get("image_list"), list) or not isinstance(card.get("desc"), str):
                 raise RuntimeError("笔记详情缺少完整的图片列表或正文，已停止归档")
             return item

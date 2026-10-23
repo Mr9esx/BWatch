@@ -1,0 +1,8 @@
+.media-info h3,.media-audio h4{font-size:14px;font-weight:700;color:var(--ink)}
+.media-facts{display:flex;flex-direction:column;gap:9px;margin:4px 0;font-size:13px;line-height:1.6}
+.media-facts>div{display:grid;grid-template-columns:76px minmax(0,1fr);gap:10px}
+.media-facts dt{color:var(--muted)}
+.media-facts dd{margin:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.media-audio{border-top:1px solid #d8d0dc;margin-top:6px;padding-top:10px}
+.media-audio h4{margin-bottom:8px}
+.media-info-error{display:flex;flex-direction:column;align-items:flex-start;gap:10px;font-size:13px;line-height:1.7}

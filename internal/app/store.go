@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -50,16 +52,18 @@ type Creator struct {
 	ContentTotals          *ContentTotals  `json:"contentTotals,omitempty"`
 }
 type Entry struct {
-	ID        string      `json:"id"`
-	Kind      ContentKind `json:"kind,omitempty"`
-	Title     string      `json:"title"`
-	URL       string      `json:"url"`
-	Thumbnail string      `json:"thumbnail"`
-	Duration  float64     `json:"duration"`
-	Content   string      `json:"content,omitempty"`
-	Images    []string    `json:"images,omitempty"`
+	PublishedAt *time.Time  `json:"publishedAt,omitempty"`
+	ID          string      `json:"id"`
+	Kind        ContentKind `json:"kind,omitempty"`
+	Title       string      `json:"title"`
+	URL         string      `json:"url"`
+	Thumbnail   string      `json:"thumbnail"`
+	Duration    float64     `json:"duration"`
+	Content     string      `json:"content,omitempty"`
+	Images      []string    `json:"images,omitempty"`
 }
 type Task struct {
+	PublishedAt   *time.Time  `json:"publishedAt,omitempty"`
 	DetailFetched bool        `json:"detailFetched,omitempty"`
 	ID            string      `json:"id"`
 	Platform      PlatformID  `json:"platform"`
@@ -129,6 +133,7 @@ type App struct {
 	mu             sync.Mutex
 	state          State
 	statePath      string
+	stateDB        *sql.DB
 	downloadDir    string
 	binary         string
 	running        map[string]context.CancelFunc
@@ -138,6 +143,9 @@ type App struct {
 	httpClient     *http.Client
 	platforms      platformRegistry
 	xhsBrowser     *xhsBrowser
+	xhsLoginMu     sync.Mutex
+	xhsLogin       *xhsLoginSession
+	xhsSMSNext     time.Time
 	loginMu        sync.Mutex
 	login          *loginSession
 	xhsAccountMu   sync.Mutex
@@ -146,6 +154,7 @@ type App struct {
 	account        accountCache
 	historyBusy    bool
 	metrics        resourceSampler
+	thumbnailMu    sync.Mutex
 }
 
 // New opens a single-process store. A failed transaction never changes memory.
@@ -161,14 +170,18 @@ func New(dataDir, downloadDir, binary string) (*App, error) {
 		return nil, err
 	}
 	a := &App{statePath: filepath.Join(dataDir, "state.json"), downloadDir: absolute, binary: binary, running: map[string]context.CancelFunc{}, checking: map[string]bool{}, historyCache: map[string]PlatformFeed{}, httpClient: &http.Client{Timeout: 30 * time.Second, CheckRedirect: checkRedirect}, platforms: newPlatformRegistry(), xhsBrowser: newXHSBrowser(dataDir)}
-	a.state = State{SchemaVersion: 2, Creators: []Creator{}, Tasks: []Task{}, Events: []Event{}, Settings: Settings{Concurrency: 1, Interval: 10, Quality: "best", SaveThumbnail: true, DownloadMinInterval: 1, DownloadMaxInterval: 3, BilibiliMinInterval: 1, BilibiliMaxInterval: 3}}
-	data, err := os.ReadFile(a.statePath)
-	if err == nil {
-		if err = json.Unmarshal(data, &a.state); err != nil {
-			return nil, err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	a.state = defaultState()
+	a.stateDB, err = openStateDB(filepath.Join(dataDir, "bilifetch.db"))
+	if err != nil {
 		return nil, err
+	}
+	if err = a.loadState(); err != nil {
+		_ = a.stateDB.Close()
+		return nil, err
+	}
+	if a.state.SchemaVersion > 3 {
+		_ = a.stateDB.Close()
+		return nil, fmt.Errorf("状态数据版本 %d 高于当前程序支持版本 3，请使用较新版本程序", a.state.SchemaVersion)
 	}
 	migrateState(&a.state)
 	legacyCookiePath := a.state.Settings.BilibiliCookiesFile
@@ -178,9 +191,11 @@ func New(dataDir, downloadDir, binary string) (*App, error) {
 	if legacyCookiePath != "" {
 		cookieData, readErr := os.ReadFile(legacyCookiePath)
 		if readErr != nil {
+			_ = a.stateDB.Close()
 			return nil, errors.New("旧版 B 站 Cookie 文件不可读，请重新登录")
 		}
 		if err := a.saveCredential(PlatformBilibili, cookieData); err != nil {
+			_ = a.stateDB.Close()
 			return nil, err
 		}
 		a.state.Settings.BilibiliCookiesFile = ""
@@ -203,6 +218,9 @@ func New(dataDir, downloadDir, binary string) (*App, error) {
 			a.state.Tasks[i].Status = "queued"
 		}
 		task := &a.state.Tasks[i]
+		if task.PublishedAt == nil {
+			task.PublishedAt = a.localPublication(*task)
+		}
 		if task.Platform == PlatformXiaohongshu && task.Kind == ContentImagePost && task.Status == "completed" && !task.DetailFetched && len(task.Images) == 0 && len(task.Files) == 0 {
 			task.Status = "failed"
 			task.Progress = 0
@@ -220,6 +238,7 @@ func New(dataDir, downloadDir, binary string) (*App, error) {
 		}
 	}
 	if err := a.persist(); err != nil {
+		_ = a.stateDB.Close()
 		return nil, err
 	}
 	return a, nil
@@ -282,34 +301,36 @@ func migrateState(state *State) {
 			}
 		}
 	}
-	if state.SchemaVersion >= 2 {
+	if state.SchemaVersion >= 3 {
 		return
 	}
-	for i := range state.Tasks {
-		if state.Tasks[i].Kind == "dynamic" {
-			state.Tasks[i].Kind = ContentImagePost
+	if state.SchemaVersion < 2 {
+		for i := range state.Tasks {
+			if state.Tasks[i].Kind == "dynamic" {
+				state.Tasks[i].Kind = ContentImagePost
+			}
 		}
-	}
-	migrateCatalog := func(catalog *map[string]bool) {
-		if *catalog == nil {
-			return
+		migrateCatalog := func(catalog *map[string]bool) {
+			if *catalog == nil {
+				return
+			}
+			for key, value := range *catalog {
+				if strings.HasPrefix(key, "dynamic:") {
+					(*catalog)["image_post:"+strings.TrimPrefix(key, "dynamic:")] = value
+					delete(*catalog, key)
+				}
+			}
 		}
-		for key, value := range *catalog {
-			if strings.HasPrefix(key, "dynamic:") {
-				(*catalog)["image_post:"+strings.TrimPrefix(key, "dynamic:")] = value
-				delete(*catalog, key)
+		for i := range state.Creators {
+			creator := &state.Creators[i]
+			migrateCatalog(&creator.ContentCatalog)
+			if creator.HistoryJob != nil {
+				migrateCatalog(&creator.HistoryJob.CatalogEntries)
+				migrateCatalog(&creator.HistoryJob.SeenEntries)
 			}
 		}
 	}
-	for i := range state.Creators {
-		creator := &state.Creators[i]
-		migrateCatalog(&creator.ContentCatalog)
-		if creator.HistoryJob != nil {
-			migrateCatalog(&creator.HistoryJob.CatalogEntries)
-			migrateCatalog(&creator.HistoryJob.SeenEntries)
-		}
-	}
-	state.SchemaVersion = 2
+	state.SchemaVersion = 3
 }
 func cloneState(s State) State {
 	data, _ := json.Marshal(s)
@@ -331,25 +352,9 @@ func (a *App) persist() error {
 	if err != nil {
 		return err
 	}
-	temp, err := os.CreateTemp(filepath.Dir(a.statePath), ".state-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(temp.Name())
-	if err = temp.Chmod(0600); err == nil {
-		_, err = temp.Write(data)
-	}
-	if err == nil {
-		err = temp.Sync()
-	}
-	closeErr := temp.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	return os.Rename(temp.Name(), a.statePath)
+	_, err = a.stateDB.Exec(`INSERT INTO app_state (id, payload) VALUES (1, ?)
+		ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = CURRENT_TIMESTAMP`, string(data))
+	return err
 }
 func (a *App) transaction(fn func() error) error {
 	a.mu.Lock()

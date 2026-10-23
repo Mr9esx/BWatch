@@ -4,7 +4,7 @@ set -eu
 PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 RUNTIME_DIR=${BILIFETCH_XHS_RUNTIME:-"$PROJECT_DIR/.tools/xhs-api"}
 SPIDER_REV=71d077dd39618dfbafb86130257adf97b68fe3af
-PYTHON_BIN=${PYTHON_BIN:-python3.12}
+PYTHON_BIN=${PYTHON_BIN:-python3}
 command -v node >/dev/null
 mkdir -p "$RUNTIME_DIR"
 if [ ! -x "$RUNTIME_DIR/venv/bin/python" ]; then

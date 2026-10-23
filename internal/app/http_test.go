@@ -123,10 +123,10 @@ func TestThumbnailAPIUsesArchivedImages(t *testing.T) {
 	}
 	a.state.Tasks = []Task{
 		{ID: "video", Kind: "video", Status: "completed", File: video, Thumbnail: "https://example.invalid/remote.jpg"},
-		{ID: "dynamic", Kind: "dynamic", Status: "completed", Files: []string{image}},
+		{ID: "dynamic", Kind: ContentImagePost, Status: "completed", Files: []string{image}},
 		{ID: "queued", Kind: "video", Status: "queued", File: video},
 		{ID: "missing", Kind: "video", Status: "completed", File: filepath.Join(a.downloadDir, "missing.mp4")},
-		{ID: "text", Kind: "dynamic", Status: "completed"},
+		{ID: "text", Kind: ContentImagePost, Status: "completed"},
 	}
 	h := a.Handler(context.Background(), "", "")
 	for _, id := range []string{"video", "dynamic", "queued", "missing", "text", "unknown"} {
@@ -159,9 +159,9 @@ func TestThumbnailAPIRejectsEscapesAndNonImages(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.state.Tasks = []Task{
-		{ID: "outside", Kind: "dynamic", Status: "completed", Files: []string{outside}},
+		{ID: "outside", Kind: ContentImagePost, Status: "completed", Files: []string{outside}},
 		{ID: "link", Kind: "video", Status: "completed", File: filepath.Join(a.downloadDir, "linked.mp4")},
-		{ID: "text", Kind: "dynamic", Status: "completed", Files: []string{text}},
+		{ID: "text", Kind: ContentImagePost, Status: "completed", Files: []string{text}},
 	}
 	h := a.Handler(context.Background(), "", "")
 	for _, id := range []string{"outside", "link", "text"} {

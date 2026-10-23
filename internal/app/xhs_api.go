@@ -41,17 +41,9 @@ func (a *App) callXHSAPI(ctx context.Context, input xhsAPIRequest, output any) e
 	if err := validateProxy(input.Proxy); err != nil {
 		return err
 	}
-	runtimeDir := os.Getenv("BILIFETCH_XHS_RUNTIME")
-	if runtimeDir == "" {
-		runtimeDir = filepath.Join(".tools", "xhs-api")
-	}
-	runtimeDir, err = filepath.Abs(runtimeDir)
+	python, source, err := xhsRuntime()
 	if err != nil {
 		return err
-	}
-	python := filepath.Join(runtimeDir, "venv", "bin", "python")
-	if _, err := os.Stat(python); err != nil {
-		return errors.New("小红书 API 运行环境未安装，请运行 sh scripts/install-xhs-api.sh")
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
@@ -59,7 +51,7 @@ func (a *App) callXHSAPI(ctx context.Context, input xhsAPIRequest, output any) e
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	command := exec.CommandContext(ctx, python, "-c", xhsAPIWorker, filepath.Join(runtimeDir, "spider-xhs"))
+	command := exec.CommandContext(ctx, python, "-c", xhsAPIWorker, source)
 	configureProcess(command)
 	command.Stdin = bytes.NewReader(body)
 	result := &cappedBuffer{limit: 20 << 20}
@@ -82,6 +74,22 @@ func (a *App) callXHSAPI(ctx context.Context, input xhsAPIRequest, output any) e
 		return fmt.Errorf("小红书 API 请求失败: %s", response.Error)
 	}
 	return json.Unmarshal(response.Data, output)
+}
+
+func xhsRuntime() (string, string, error) {
+	dir := os.Getenv("BILIFETCH_XHS_RUNTIME")
+	if dir == "" {
+		dir = filepath.Join(".tools", "xhs-api")
+	}
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", "", err
+	}
+	python := filepath.Join(dir, "venv", "bin", "python")
+	if _, err := os.Stat(python); err != nil {
+		return "", "", errors.New("小红书 API 运行环境未安装，请运行 sh scripts/install-xhs-api.sh")
+	}
+	return python, filepath.Join(dir, "spider-xhs"), nil
 }
 
 func (a *App) resolveXHSRedID(ctx context.Context, redID string) (CreatorRef, error) {
@@ -192,6 +200,9 @@ func (a *App) resolveXHSArchiveTask(ctx context.Context, task Task) (Task, error
 	}
 	task.Title, task.Content, task.Images, task.Thumbnail = entry.Title, entry.Content, entry.Images, entry.Thumbnail
 	task.DetailFetched = true
+	if entry.PublishedAt != nil {
+		task.PublishedAt = entry.PublishedAt
+	}
 	err = a.transaction(func() error {
 		for i := range a.state.Tasks {
 			saved := &a.state.Tasks[i]
@@ -203,6 +214,9 @@ func (a *App) resolveXHSArchiveTask(ctx context.Context, task Task) (Task, error
 			}
 			saved.Title, saved.Content, saved.Images, saved.Thumbnail = task.Title, task.Content, task.Images, task.Thumbnail
 			saved.DetailFetched = true
+			if entry.PublishedAt != nil {
+				saved.PublishedAt = entry.PublishedAt
+			}
 			return nil
 		}
 		return errors.New("归档任务不存在")

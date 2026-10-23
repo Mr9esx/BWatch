@@ -1,0 +1,53 @@
+:root {
+  --motion-fast: 160ms;
+  --motion-ease: cubic-bezier(.22, 1, .36, 1);
+}
+
+/* 位移与布局动画分别使用 translate / transform，避免覆盖 Hero 投影。 */
+.nav-item, .tab-group>button, .view-switch button, .page-search,
+.filter-select, .content-choices>label, .history-options>label {
+  transition: background-color var(--motion-fast), color var(--motion-fast),
+    border-color var(--motion-fast), box-shadow var(--motion-fast),
+    translate var(--motion-fast) var(--motion-ease);
+}
+.creator-card, .library-item, .library-folder-card, .platform-account-card {
+  transition: box-shadow 220ms var(--motion-ease), translate 220ms var(--motion-ease);
+}
+.thumbnail img { transition: scale 320ms var(--motion-ease); }
+.thumbnail .thumb-play { transition: opacity var(--motion-fast), scale var(--motion-fast); }
+.thumb-play { scale: .9; }
+.thumbnail:hover .thumb-play, .thumbnail:focus-visible .thumb-play { scale: 1; }
+.nav-item>svg, .library-folder-footer>svg { transition: translate 200ms var(--motion-ease); }
+.task-progress i, .resource-bar i { transition: width 400ms ease; }
+.toast { animation: none; }
+.page-enter { animation: page-arrive 280ms var(--motion-ease) both; }
+.page-enter>.page-heading { animation: heading-arrive 320ms var(--motion-ease) both; }
+.sidebar-backdrop { animation: backdrop-arrive 180ms ease both; }
+.dynamic-main-image-open img { animation: image-arrive 180ms ease both; }
+
+@media (hover:hover) and (pointer:fine) {
+  .nav-item:hover>svg { translate: 2px 0; }
+  .creator-grid:not(.list-view)>.creator-card:hover,
+  .library-item:hover, .library-folder-card[data-react-aria-pressable]:hover,
+  .platform-account-card:hover {
+    translate: 0 -3px;
+    box-shadow: 5px 7px 0 var(--ink);
+  }
+  .library-folder-card[data-react-aria-pressable]:hover { transform: none; }
+  .library-folder-card:hover .library-folder-footer>svg { translate: 3px 0; }
+  .library-item:hover .thumbnail img { scale: 1.035; }
+  .library-item:active { translate: 0 -1px; }
+}
+.nav-item:active { translate: 1px 1px; }
+
+@keyframes page-arrive { from { opacity: 0; } to { opacity: 1; } }
+@keyframes heading-arrive { from { opacity: 0; translate: 0 6px; } to { opacity: 1; translate: 0 0; } }
+@keyframes backdrop-arrive { from { opacity: 0; } to { opacity: 1; } }
+@keyframes image-arrive { from { opacity: .5; } to { opacity: 1; } }
+
+@media (prefers-reduced-motion:reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  .nav-item, .nav-item>svg, .creator-card, .library-item, .library-folder-card,
+  .platform-account-card, .library-folder-footer>svg { translate: none !important; }
+  .thumbnail img, .thumb-play { scale: 1 !important; }
+}

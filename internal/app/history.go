@@ -213,6 +213,7 @@ func (a *App) ProcessHistoryPage(ctx context.Context, creatorID string) error {
 			queueFull := false
 			add := func(entries []Entry, kind ContentKind) {
 				for _, e := range entries {
+					a.fillEntryPublicationLocked(c.ID, kind, e)
 					if e.ID == "" || (h.Limit > 0 && h.Videos+h.Dynamics >= h.Limit) {
 						continue
 					}
@@ -229,7 +230,7 @@ func (a *App) ProcessHistoryPage(ctx context.Context, creatorID string) error {
 					if title == "" {
 						title = e.ID
 					}
-					a.state.Tasks = append(a.state.Tasks, Task{ID: id(), Platform: c.Platform, CreatorID: c.ID, CreatorName: c.Name, VideoID: e.ID, Kind: kind, Title: title, URL: e.URL, Thumbnail: e.Thumbnail, Duration: e.Duration, Quality: c.Quality, Status: "queued", Content: e.Content, Images: e.Images, CreatedAt: time.Now(), HistoryJobID: h.ID})
+					a.state.Tasks = append(a.state.Tasks, Task{PublishedAt: e.PublishedAt, ID: id(), Platform: c.Platform, CreatorID: c.ID, CreatorName: c.Name, VideoID: e.ID, Kind: kind, Title: title, URL: e.URL, Thumbnail: e.Thumbnail, Duration: e.Duration, Quality: c.Quality, Status: "queued", Content: e.Content, Images: e.Images, CreatedAt: time.Now(), HistoryJobID: h.ID})
 					pending++
 					existing[key] = true
 					h.SeenEntries[key] = true

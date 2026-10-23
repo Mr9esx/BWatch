@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/zalando/go-keyring"
@@ -38,7 +39,84 @@ func (a *App) SavedPlatformAccount(platform PlatformID) XHSAccount {
 	return XHSAccount{State: "logged_in", Message: "已保存登录凭据"}
 }
 
-func credentialKey() ([]byte, error) {
+func credentialKey(dataDir string) ([]byte, string, error) {
+	credentialKeyCache.Lock()
+	defer credentialKeyCache.Unlock()
+	if len(credentialKeyCache.key) == 32 {
+		return credentialKeyCache.key, "v2k", nil
+	}
+	encoded, err := keyring.Get(credentialService, "state-encryption-key")
+	if err != nil {
+		key := make([]byte, 32)
+		if _, err = rand.Read(key); err != nil {
+			return nil, "", err
+		}
+		if err = keyring.Set(credentialService, "state-encryption-key", base64.RawStdEncoding.EncodeToString(key)); err == nil {
+			credentialKeyCache.key = key
+			return key, "v2k", nil
+		}
+		fileKey, fileErr := credentialFileKey(dataDir)
+		if fileErr != nil {
+			return nil, "", errors.New("无法初始化登录凭据加密密钥")
+		}
+		return fileKey, "v2f", nil
+	}
+	key, err := base64.RawStdEncoding.DecodeString(encoded)
+	if err != nil || len(key) != 32 {
+		return nil, "", errors.New("系统安全凭据库中的加密密钥无效")
+	}
+	credentialKeyCache.key = key
+	return key, "v2k", nil
+}
+
+func credentialFileKey(dataDir string) ([]byte, error) {
+	path := filepath.Join(dataDir, ".credential-key")
+	key, err := os.ReadFile(path)
+	if err == nil {
+		if len(key) != 32 {
+			return nil, errors.New("本地凭据密钥无效")
+		}
+		if err = os.Chmod(path, 0600); err != nil {
+			return nil, err
+		}
+		return key, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	key = make([]byte, 32)
+	if _, err = rand.Read(key); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if errors.Is(err, os.ErrExist) { // Another process initialized it first.
+		key, err = os.ReadFile(path)
+		if err == nil && len(key) == 32 {
+			return key, nil
+		}
+		return nil, errors.New("本地凭据密钥无效")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err = file.Write(key); err == nil {
+		err = file.Sync()
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(path)
+		return nil, err
+	}
+	if err = os.Chmod(path, 0600); err != nil {
+		_ = os.Remove(path)
+		return nil, err
+	}
+	return key, nil
+}
+
+func credentialKeyring() ([]byte, error) {
 	credentialKeyCache.Lock()
 	defer credentialKeyCache.Unlock()
 	if len(credentialKeyCache.key) == 32 {
@@ -46,15 +124,7 @@ func credentialKey() ([]byte, error) {
 	}
 	encoded, err := keyring.Get(credentialService, "state-encryption-key")
 	if err != nil {
-		key := make([]byte, 32)
-		if _, err = rand.Read(key); err != nil {
-			return nil, err
-		}
-		if err = keyring.Set(credentialService, "state-encryption-key", base64.RawStdEncoding.EncodeToString(key)); err != nil {
-			return nil, errors.New("无法访问系统安全凭据库，未保存登录 Cookie")
-		}
-		credentialKeyCache.key = key
-		return key, nil
+		return nil, err
 	}
 	key, err := base64.RawStdEncoding.DecodeString(encoded)
 	if err != nil || len(key) != 32 {
@@ -64,8 +134,9 @@ func credentialKey() ([]byte, error) {
 	return key, nil
 }
 
-func encryptCredential(platform PlatformID, plain []byte) (string, error) {
-	key, err := credentialKey()
+func (a *App) encryptCredential(platform PlatformID, plain []byte) (string, error) {
+	dataDir := filepath.Dir(a.statePath)
+	key, version, err := credentialKey(dataDir)
 	if err != nil {
 		return "", err
 	}
@@ -82,18 +153,28 @@ func encryptCredential(platform PlatformID, plain []byte) (string, error) {
 		return "", err
 	}
 	sealed := aead.Seal(nonce, nonce, plain, []byte("BiliFetch credential v1:"+string(platform)))
-	return "v1:" + base64.RawStdEncoding.EncodeToString(sealed), nil
+	return version + ":" + base64.RawStdEncoding.EncodeToString(sealed), nil
 }
 
-func decryptCredential(platform PlatformID, encoded string) ([]byte, error) {
-	if len(encoded) < 4 || encoded[:3] != "v1:" {
+func (a *App) decryptCredential(platform PlatformID, encoded string) ([]byte, error) {
+	if len(encoded) < 4 {
 		return nil, errors.New("登录凭据格式无效，请重新登录")
 	}
-	key, err := credentialKey()
+	version := encoded[:3]
+	var key []byte
+	var err error
+	switch version {
+	case "v1:", "v2k":
+		key, err = credentialKeyring()
+	case "v2f":
+		key, err = credentialFileKey(filepath.Dir(a.statePath))
+	default:
+		return nil, errors.New("登录凭据格式无效，请重新登录")
+	}
 	if err != nil {
 		return nil, err
 	}
-	sealed, err := base64.RawStdEncoding.DecodeString(encoded[3:])
+	sealed, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(encoded[3:], ":"))
 	if err != nil {
 		return nil, errors.New("登录凭据无法解码，请重新登录")
 	}
@@ -115,7 +196,7 @@ func (a *App) saveCredential(platform PlatformID, plain []byte) error {
 	if existing, err := a.loadCredential(platform); err == nil && bytes.Equal(existing, plain) {
 		return nil
 	}
-	sealed, err := encryptCredential(platform, plain)
+	sealed, err := a.encryptCredential(platform, plain)
 	if err != nil {
 		return err
 	}
@@ -135,7 +216,7 @@ func (a *App) loadCredential(platform PlatformID) ([]byte, error) {
 	if sealed == "" {
 		return nil, errors.New("请先登录对应平台")
 	}
-	return decryptCredential(platform, sealed)
+	return a.decryptCredential(platform, sealed)
 }
 
 func (a *App) deleteCredential(platform PlatformID) error {

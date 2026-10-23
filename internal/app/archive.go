@@ -2,11 +2,14 @@ package app
 
 import (
 	"archive/zip"
+	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 func (a *App) serveArchive(w http.ResponseWriter, r *http.Request) {
@@ -43,7 +46,26 @@ func (a *App) serveArchive(w http.ResponseWriter, r *http.Request) {
 				file.Close()
 				return
 			}
-			_, err = io.Copy(entry, file)
+			if task.PublishedAt != nil && (filepath.Base(path) == "metadata.json" || path == verified[0]) {
+				var body []byte
+				body, err = io.ReadAll(file)
+				if err == nil && filepath.Base(path) == "metadata.json" {
+					var metadata map[string]json.RawMessage
+					if err = json.Unmarshal(body, &metadata); err == nil {
+						metadata["publishedAt"], err = json.Marshal(task.PublishedAt)
+						if err == nil {
+							body, err = json.MarshalIndent(metadata, "", "  ")
+						}
+					}
+				} else if err == nil && !bytes.Contains(body, []byte("\n发布时间：")) {
+					body = append(body, []byte("\n发布时间："+task.PublishedAt.Format(time.RFC3339)+"\n")...)
+				}
+				if err == nil {
+					_, err = entry.Write(body)
+				}
+			} else {
+				_, err = io.Copy(entry, file)
+			}
 			file.Close()
 			if err != nil {
 				return
