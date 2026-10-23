@@ -280,6 +280,9 @@ func (a *App) downloadVideo(ctx context.Context, t Task, s Settings) (string, []
 	args = append(args, "--", t.URL)
 	cmd := exec.CommandContext(ctx, a.binary, args...)
 	configureProcess(cmd)
+	if platform == PlatformXiaohongshu {
+		a.configureXHSPython(cmd, true)
+	}
 	stderr := &cappedBuffer{limit: 256 << 10}
 	cmd.Stderr = stderr
 	stdout, err := cmd.StdoutPipe()
@@ -362,39 +365,53 @@ func (a *App) startNext(ctx context.Context) bool {
 	var settings Settings
 	err := a.transaction(func() error {
 		now := time.Now()
-		if a.state.Paused || len(a.running) >= a.state.Settings.Concurrency || future(a.state.NextDownloadAt, now) {
+		if a.state.Paused {
 			return nil
 		}
 		settings = a.state.Settings
-		for i := range a.state.Tasks {
-			if len(a.running) >= settings.Concurrency {
-				break
-			}
-			t := &a.state.Tasks[i]
-			if t.Status != "queued" || a.running[t.ID] != nil {
+		for _, platform := range []PlatformID{PlatformBilibili, PlatformXiaohongshu} {
+			policy := settings.DownloadPolicies[platform]
+			if policy.Concurrency < 1 || futureTime(a.state.NextPlatformDownloadAt[platform], now) || future(a.platformBlockedUntilLocked(platform), now) {
 				continue
 			}
-			platform := t.Platform
-			if platform == "" {
-				if isBilibiliTask(*t) {
-					platform = PlatformBilibili
-				} else {
-					platform = PlatformXiaohongshu
+			active := 0
+			for i := range a.state.Tasks {
+				t := &a.state.Tasks[i]
+				if taskPlatform(*t) == platform && t.Status == "downloading" {
+					active++
 				}
 			}
-			if future(a.platformBlockedUntilLocked(platform), now) {
+			if active >= policy.Concurrency {
 				continue
 			}
-			t.Status = "downloading"
-			t.Speed, t.Error = "", ""
-			taskCtx, cancel := context.WithCancel(ctx)
-			a.running[t.ID] = cancel
-			batch = append(batch, download{task: *t, ctx: taskCtx, cancel: cancel})
+			started := 0
+			for i := range a.state.Tasks {
+				if active+started >= policy.Concurrency {
+					break
+				}
+				t := &a.state.Tasks[i]
+				if t.Status != "queued" || taskPlatform(*t) != platform || a.running[t.ID] != nil {
+					continue
+				}
+				t.Status = "downloading"
+				t.Speed, t.Error = "", ""
+				taskCtx, cancel := context.WithCancel(ctx)
+				a.running[t.ID] = cancel
+				batch = append(batch, download{task: *t, ctx: taskCtx, cancel: cancel})
+				started++
+			}
+			if started > 0 {
+				next := now.Add(jitter(time.Duration(policy.MinInterval)*time.Minute, time.Duration(policy.MaxInterval)*time.Minute))
+				if a.state.NextPlatformDownloadAt == nil {
+					a.state.NextPlatformDownloadAt = map[PlatformID]time.Time{}
+				}
+				a.state.NextPlatformDownloadAt[platform] = next
+				if platform == PlatformBilibili {
+					a.state.NextBilibiliDownloadAt = &next
+				}
+			}
 		}
-		if len(batch) > 0 {
-			next := now.Add(jitter(time.Duration(settings.DownloadMinInterval)*time.Minute, time.Duration(settings.DownloadMaxInterval)*time.Minute))
-			a.state.NextDownloadAt, a.state.NextBilibiliDownloadAt = &next, &next
-		}
+		a.refreshNextDownloadAtLocked()
 		return nil
 	})
 	if err != nil {
@@ -426,6 +443,29 @@ func (a *App) startNext(ctx context.Context) bool {
 		}()
 	}
 	return len(batch) > 0
+}
+
+func taskPlatform(task Task) PlatformID {
+	if task.Platform != "" {
+		return task.Platform
+	}
+	if isBilibiliTask(task) {
+		return PlatformBilibili
+	}
+	return PlatformXiaohongshu
+}
+
+func futureTime(value time.Time, now time.Time) bool { return !value.IsZero() && now.Before(value) }
+
+func (a *App) refreshNextDownloadAtLocked() {
+	var earliest *time.Time
+	for _, at := range a.state.NextPlatformDownloadAt {
+		if earliest == nil || at.Before(*earliest) {
+			copy := at
+			earliest = &copy
+		}
+	}
+	a.state.NextDownloadAt = earliest
 }
 
 // Keep the result in memory until it has been committed. A transient disk error

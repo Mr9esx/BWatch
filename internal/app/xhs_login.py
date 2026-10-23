@@ -103,6 +103,8 @@ def main():
                     if session is None:
                         from loguru import logger
                         logger.remove()
+                        from xhs_rate_limiter import install_browser_http_limiter
+                        install_browser_http_limiter()
                         from xhs_utils.xhs_pc import runtime
                         protect_signer(runtime)
                         from apis.xhs_pc_login_apis import XHSLoginApi

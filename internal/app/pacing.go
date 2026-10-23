@@ -45,7 +45,7 @@ func isPlatformRiskError(platform PlatformID, message string) bool {
 		return false
 	}
 	message = strings.ToLower(message)
-	for _, token := range []string{"http 403", "http 412", "http 429", "额外验证", "验证码", "要求验证", "限制了当前网络", "平台限制", "captcha", "verify", "频繁", "风控", "blocked", "forbidden"} {
+	for _, token := range []string{"http 403", "http 406", "http 412", "http 429", "额外验证", "验证码", "要求验证", "限制了当前网络", "平台限制", "captcha", "verify", "频繁", "风控", "blocked", "forbidden"} {
 		if strings.Contains(message, token) {
 			return true
 		}

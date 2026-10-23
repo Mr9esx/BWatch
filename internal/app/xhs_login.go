@@ -122,6 +122,7 @@ func (a *App) startXHSLogin(ctx context.Context, method, phone string) (XHSLogin
 	workerCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	cmd := exec.CommandContext(workerCtx, python, "-u", "-c", xhsLoginWorker, source)
 	configureProcess(cmd)
+	a.configureXHSPython(cmd, false)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()

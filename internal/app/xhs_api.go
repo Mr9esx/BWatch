@@ -20,15 +20,17 @@ import (
 var xhsAPIWorker string
 
 type xhsAPIRequest struct {
-	Operation string `json:"operation"`
-	NoteID    string `json:"noteID,omitempty"`
-	URL       string `json:"url,omitempty"`
-	Cookies   string `json:"cookies"`
-	Proxy     string `json:"proxy"`
-	RedID     string `json:"redID,omitempty"`
-	UserID    string `json:"userID,omitempty"`
-	Token     string `json:"token,omitempty"`
-	Source    string `json:"source,omitempty"`
+	Operation string   `json:"operation"`
+	NoteID    string   `json:"noteID,omitempty"`
+	URL       string   `json:"url,omitempty"`
+	Cookies   string   `json:"cookies"`
+	Proxy     string   `json:"proxy"`
+	RedID     string   `json:"redID,omitempty"`
+	UserID    string   `json:"userID,omitempty"`
+	Token     string   `json:"token,omitempty"`
+	Source    string   `json:"source,omitempty"`
+	Full      bool     `json:"full,omitempty"`
+	KnownIDs  []string `json:"knownIDs,omitempty"`
 }
 
 func (a *App) callXHSAPI(ctx context.Context, input xhsAPIRequest, output any) error {
@@ -37,7 +39,8 @@ func (a *App) callXHSAPI(ctx context.Context, input xhsAPIRequest, output any) e
 		return errors.New("请先在平台管理扫码登录小红书")
 	}
 	input.Cookies = string(credential)
-	input.Proxy = proxyURL(a.Snapshot().Settings)
+	settings := a.Snapshot().Settings
+	input.Proxy = proxyURL(settings)
 	if err := validateProxy(input.Proxy); err != nil {
 		return err
 	}
@@ -49,10 +52,15 @@ func (a *App) callXHSAPI(ctx context.Context, input xhsAPIRequest, output any) e
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	timeout := 5 * time.Minute
+	if input.Operation == "scan" && input.Full {
+		timeout = xhsHistoryScanTimeout(settings.XHSAPIRateLimit)
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, python, "-c", xhsAPIWorker, source)
 	configureProcess(command)
+	a.configureXHSPython(command, false)
 	command.Stdin = bytes.NewReader(body)
 	result := &cappedBuffer{limit: 20 << 20}
 	command.Stdout = result
@@ -71,7 +79,14 @@ func (a *App) callXHSAPI(ctx context.Context, input xhsAPIRequest, output any) e
 		return errors.New("小红书 API 适配器返回无效数据")
 	}
 	if !response.OK {
-		return fmt.Errorf("小红书 API 请求失败: %s", response.Error)
+		requestErr := fmt.Errorf("小红书 API 请求失败: %s", response.Error)
+		if isPlatformRiskError(PlatformXiaohongshu, requestErr.Error()) {
+			_ = a.transaction(func() error {
+				a.blockPlatformLocked(PlatformXiaohongshu, requestErr.Error(), time.Now())
+				return nil
+			})
+		}
+		return requestErr
 	}
 	return json.Unmarshal(response.Data, output)
 }
@@ -145,7 +160,7 @@ func (a *App) resolveXHSShareURL(ctx context.Context, raw string) (CreatorRef, e
 	return ref, nil
 }
 
-func (a *App) scanXHSAPI(ctx context.Context, creator Creator) (PlatformFeed, error) {
+func (a *App) scanXHSAPI(ctx context.Context, creator Creator, full bool) (PlatformFeed, error) {
 	ref, err := (xiaohongshuAdapter{}).NormalizeCreatorURL(creator.URL)
 	if err != nil || ref.ID == "" {
 		return PlatformFeed{}, errors.New("小红书创作者主页地址无效")
@@ -155,10 +170,27 @@ func (a *App) scanXHSAPI(ctx context.Context, creator Creator) (PlatformFeed, er
 		Notes    []json.RawMessage `json:"notes"`
 		Complete bool              `json:"complete"`
 	}
-	if err := a.callXHSAPI(ctx, xhsAPIRequest{Operation: "scan", UserID: ref.ID, Token: u.Query().Get("xsec_token"), Source: u.Query().Get("xsec_source")}, &result); err != nil {
+	known := make(map[string]bool, len(creator.Seen)+len(creator.SeenDynamics)+len(creator.ContentCatalog))
+	for id := range creator.Seen {
+		known[id] = true
+	}
+	for id := range creator.SeenDynamics {
+		known[id] = true
+	}
+	for id := range creator.ContentCatalog {
+		parts := strings.SplitN(id, ":", 2)
+		if len(parts) == 2 {
+			known[parts[1]] = true
+		}
+	}
+	knownIDs := make([]string, 0, len(known))
+	for id := range known {
+		knownIDs = append(knownIDs, id)
+	}
+	if err := a.callXHSAPI(ctx, xhsAPIRequest{Operation: "scan", UserID: ref.ID, Token: u.Query().Get("xsec_token"), Source: u.Query().Get("xsec_source"), Full: full, KnownIDs: knownIDs}, &result); err != nil {
 		return PlatformFeed{}, err
 	}
-	if !result.Complete {
+	if full && !result.Complete {
 		return PlatformFeed{}, errors.New("小红书笔记列表读取未完成")
 	}
 	feed := PlatformFeed{Complete: result.Complete, Entries: []Entry{}}

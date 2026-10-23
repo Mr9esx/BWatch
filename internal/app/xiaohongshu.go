@@ -14,6 +14,7 @@ import (
 
 	cdpbrowser "github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/storage"
 	"github.com/chromedp/chromedp"
@@ -24,6 +25,7 @@ import (
 // calls also keeps short-lived signatures and challenge state out of Go logs.
 type xhsBrowser struct {
 	mu          sync.Mutex
+	app         *App
 	profileDir  string
 	allocCancel context.CancelFunc
 	browser     context.Context
@@ -110,7 +112,43 @@ func (b *xhsBrowser) pageLocked(ctx context.Context) (context.Context, error) {
 		b.page, b.pageStop = nil, nil
 		return nil, err
 	}
+	page := b.page
+	chromedp.ListenTarget(page, func(event any) {
+		switch event := event.(type) {
+		case *fetch.EventRequestPaused:
+			go b.continueBrowserRequest(page, event)
+		case *network.EventResponseReceived:
+			if b.app != nil && isXHSAPIURL(event.Response.URL) && isRiskHTTPStatus(event.Response.Status) {
+				go func(status int64) {
+					_ = b.app.transaction(func() error {
+						b.app.blockPlatformLocked(PlatformXiaohongshu, fmt.Sprintf("小红书 API HTTP %d", status), time.Now())
+						return nil
+					})
+				}(event.Response.Status)
+			}
+		}
+	})
+	if err := chromedp.Run(page, network.Enable(), fetch.Enable().WithPatterns([]*fetch.RequestPattern{
+		{URLPattern: "*://xiaohongshu.com/*", RequestStage: fetch.RequestStageRequest},
+		{URLPattern: "*://*.xiaohongshu.com/*", RequestStage: fetch.RequestStageRequest},
+	})); err != nil {
+		b.pageStop()
+		b.page, b.pageStop = nil, nil
+		return nil, err
+	}
 	return b.page, nil
+}
+
+func (b *xhsBrowser) continueBrowserRequest(page context.Context, event *fetch.EventRequestPaused) {
+	ctx, cancel := context.WithTimeout(page, 2*time.Minute)
+	defer cancel()
+	if isXHSAPIURL(event.Request.URL) && b.app != nil {
+		if err := b.app.waitXHSAPIToken(ctx); err != nil {
+			_ = chromedp.Run(page, fetch.FailRequest(event.RequestID, network.ErrorReasonAborted))
+			return
+		}
+	}
+	_ = chromedp.Run(ctx, fetch.ContinueRequest(event.RequestID))
 }
 
 func (b *xhsBrowser) login(ctx context.Context) error {

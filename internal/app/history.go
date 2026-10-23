@@ -147,7 +147,7 @@ func (a *App) ProcessHistoryPage(ctx context.Context, creatorID string) error {
 	}
 	timeout := 45 * time.Second
 	if creator.Platform == PlatformXiaohongshu {
-		timeout = 10 * time.Minute
+		timeout = xhsHistoryScanTimeout(settings.XHSAPIRateLimit)
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -292,11 +292,7 @@ func (a *App) fetchHistoryPage(ctx context.Context, creator Creator, settings Se
 	cached, ok := a.historyCache[job.ID]
 	a.historyCacheMu.Unlock()
 	if !ok {
-		provider, exists := a.platforms.byPlatform(creator.Platform)
-		if !exists {
-			return bilibiliFeed{}, errors.New("未注册小红书平台适配器")
-		}
-		result, err := provider.Scan(ctx, a, creator, settings)
+		result, err := a.scanXHSAPI(ctx, creator, true)
 		if err != nil {
 			return bilibiliFeed{}, err
 		}

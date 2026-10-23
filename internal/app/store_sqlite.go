@@ -6,11 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
 
-const stateDBVersion = 1
+const stateDBVersion = 2
 
 func defaultState() State {
 	return State{
@@ -21,6 +22,11 @@ func defaultState() State {
 		Settings: Settings{
 			Concurrency: 1, Interval: 10, Quality: "best", SaveThumbnail: true,
 			DownloadMinInterval: 1, DownloadMaxInterval: 3,
+			DownloadPolicies: map[PlatformID]DownloadPolicy{
+				PlatformBilibili:    {Concurrency: 1, MinInterval: 1, MaxInterval: 3},
+				PlatformXiaohongshu: {Concurrency: 1, MinInterval: 10, MaxInterval: 20},
+			},
+			XHSAPIRateLimit:     0.2,
 			BilibiliMinInterval: 1, BilibiliMaxInterval: 3,
 		},
 	}
@@ -73,6 +79,16 @@ func migrateStateDB(db *sql.DB) error {
 				payload TEXT NOT NULL,
 				updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 			)`)
+		case 2:
+			_, err = tx.Exec(`CREATE TABLE xhs_api_bucket (
+				id INTEGER PRIMARY KEY CHECK (id = 1),
+				tokens REAL NOT NULL,
+				updated_at REAL NOT NULL,
+				qps REAL NOT NULL
+			)`)
+			if err == nil {
+				_, err = tx.Exec(`INSERT INTO xhs_api_bucket (id, tokens, updated_at, qps) VALUES (1, 0, ?, 0.2)`, float64(time.Now().UnixNano())/1e9)
+			}
 		default:
 			err = fmt.Errorf("缺少数据库迁移版本 %d", next)
 		}
@@ -92,6 +108,9 @@ func migrateStateDB(db *sql.DB) error {
 }
 
 func (a *App) loadState() error {
+	// Let migration derive platform policies from saved legacy settings. A
+	// pre-filled default map would hide the absence of this field in old data.
+	a.state.Settings.DownloadPolicies = nil
 	var payload string
 	err := a.stateDB.QueryRow(`SELECT payload FROM app_state WHERE id = 1`).Scan(&payload)
 	if err == nil {

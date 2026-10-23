@@ -71,6 +71,8 @@ def resolve_creator(api, red_id):
 
 
 def run(request):
+    from xhs_rate_limiter import install_browser_http_limiter
+    install_browser_http_limiter()
     from apis.xhs_pc_apis import XHS_Apis
     from xhs_utils.xhs_pc import XHSPcAuth
 
@@ -117,11 +119,19 @@ def run(request):
             cursor = ""
             seen = set()
             notes = []
-            for _ in range(100):
+            known = set(request.get("knownIDs") or [])
+            full = bool(request.get("full"))
+            page_limit = 100 if full else 3
+            for _ in range(page_limit):
                 payload = accepted(api.get_user_note_info(request["userID"], cursor, request.get("token", ""), request.get("source") or "pc_user"))
                 data = payload.get("data") or {}
                 page = data.get("notes") or []
-                notes.extend(page)
+                for note in page:
+                    card = note.get("note_card") or {}
+                    note_id = str(note.get("id") or card.get("note_id") or "")
+                    if not full and note_id in known:
+                        return {"notes": notes, "complete": False}
+                    notes.append(note)
                 if data.get("has_more") is False:
                     return {"notes": notes, "complete": True}
                 following = str(data.get("cursor") or "")
@@ -129,7 +139,10 @@ def run(request):
                     raise RuntimeError("小红书分页没有继续前进，当前结果不完整")
                 seen.add(following)
                 cursor = following
-                time.sleep(1.5)
+                if full:
+                    time.sleep(1.5)
+            if not full:
+                return {"notes": notes, "complete": False}
             raise RuntimeError("小红书笔记超过 100 页，本次读取未完成")
         raise ValueError("不支持的小红书 API 操作")
     finally:

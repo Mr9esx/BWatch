@@ -91,20 +91,27 @@ type Task struct {
 	HistoryJobID  string      `json:"historyJobId,omitempty"`
 }
 type Settings struct {
-	Concurrency         int     `json:"concurrency"`
-	Interval            int     `json:"interval"`
-	Quality             string  `json:"quality"`
-	BilibiliCookiesFile string  `json:"bilibiliCookiesFile,omitempty"`
-	CookiesFile         string  `json:"cookiesFile,omitempty"`
-	ProxyURL            string  `json:"proxyURL"`
-	MaxDownloadSpeed    float64 `json:"maxDownloadSpeed"`
-	DownloadSubtitles   bool    `json:"downloadSubtitles"`
-	SaveThumbnail       bool    `json:"saveThumbnail"`
-	DownloadMinInterval int     `json:"downloadMinInterval"`
-	DownloadMaxInterval int     `json:"downloadMaxInterval"`
+	Concurrency         int                           `json:"concurrency"`
+	Interval            int                           `json:"interval"`
+	Quality             string                        `json:"quality"`
+	BilibiliCookiesFile string                        `json:"bilibiliCookiesFile,omitempty"`
+	CookiesFile         string                        `json:"cookiesFile,omitempty"`
+	ProxyURL            string                        `json:"proxyURL"`
+	MaxDownloadSpeed    float64                       `json:"maxDownloadSpeed"`
+	DownloadSubtitles   bool                          `json:"downloadSubtitles"`
+	SaveThumbnail       bool                          `json:"saveThumbnail"`
+	DownloadMinInterval int                           `json:"downloadMinInterval"`
+	DownloadMaxInterval int                           `json:"downloadMaxInterval"`
+	DownloadPolicies    map[PlatformID]DownloadPolicy `json:"downloadPolicies"`
+	XHSAPIRateLimit     float64                       `json:"xhsApiQPS"`
 	// Legacy fields are retained for state-file migration and older clients.
 	BilibiliMinInterval int `json:"bilibiliMinInterval"`
 	BilibiliMaxInterval int `json:"bilibiliMaxInterval"`
+}
+type DownloadPolicy struct {
+	Concurrency int `json:"concurrency"`
+	MinInterval int `json:"minInterval"`
+	MaxInterval int `json:"maxInterval"`
 }
 type Event struct {
 	ID      string    `json:"id"`
@@ -113,16 +120,17 @@ type Event struct {
 	Message string    `json:"message"`
 }
 type State struct {
-	SchemaVersion      int                      `json:"schemaVersion"`
-	Creators           []Creator                `json:"creators"`
-	Tasks              []Task                   `json:"tasks"`
-	Events             []Event                  `json:"events"`
-	Settings           Settings                 `json:"settings"`
-	Credentials        map[PlatformID]string    `json:"credentials,omitempty"`
-	Paused             bool                     `json:"paused"`
-	PlatformCooldowns  map[PlatformID]time.Time `json:"platformCooldowns,omitempty"`
-	PlatformRiskCounts map[PlatformID]int       `json:"platformRiskCounts,omitempty"`
-	NextDownloadAt     *time.Time               `json:"nextDownloadAt,omitempty"`
+	SchemaVersion          int                      `json:"schemaVersion"`
+	Creators               []Creator                `json:"creators"`
+	Tasks                  []Task                   `json:"tasks"`
+	Events                 []Event                  `json:"events"`
+	Settings               Settings                 `json:"settings"`
+	Credentials            map[PlatformID]string    `json:"credentials,omitempty"`
+	Paused                 bool                     `json:"paused"`
+	PlatformCooldowns      map[PlatformID]time.Time `json:"platformCooldowns,omitempty"`
+	PlatformRiskCounts     map[PlatformID]int       `json:"platformRiskCounts,omitempty"`
+	NextDownloadAt         *time.Time               `json:"nextDownloadAt,omitempty"`
+	NextPlatformDownloadAt map[PlatformID]time.Time `json:"nextPlatformDownloadAt,omitempty"`
 	// Legacy timestamp retained so older saved states can be migrated.
 	NextBilibiliDownloadAt *time.Time `json:"nextBilibiliDownloadAt,omitempty"`
 	NextHistoryPageAt      *time.Time `json:"nextHistoryPageAt,omitempty"`
@@ -134,6 +142,8 @@ type App struct {
 	state          State
 	statePath      string
 	stateDB        *sql.DB
+	xhsRateDBPath  string
+	xhsPythonDir   string
 	downloadDir    string
 	binary         string
 	running        map[string]context.CancelFunc
@@ -171,8 +181,17 @@ func New(dataDir, downloadDir, binary string) (*App, error) {
 	}
 	a := &App{statePath: filepath.Join(dataDir, "state.json"), downloadDir: absolute, binary: binary, running: map[string]context.CancelFunc{}, checking: map[string]bool{}, historyCache: map[string]PlatformFeed{}, httpClient: &http.Client{Timeout: 30 * time.Second, CheckRedirect: checkRedirect}, platforms: newPlatformRegistry(), xhsBrowser: newXHSBrowser(dataDir)}
 	a.state = defaultState()
-	a.stateDB, err = openStateDB(filepath.Join(dataDir, "bilifetch.db"))
+	a.xhsRateDBPath, err = filepath.Abs(filepath.Join(dataDir, "bilifetch.db"))
 	if err != nil {
+		return nil, err
+	}
+	a.xhsPythonDir = filepath.Join(dataDir, "xhs-python")
+	a.stateDB, err = openStateDB(a.xhsRateDBPath)
+	if err != nil {
+		return nil, err
+	}
+	if err = a.writeXHSPythonHooks(); err != nil {
+		_ = a.stateDB.Close()
 		return nil, err
 	}
 	if err = a.loadState(); err != nil {
@@ -183,6 +202,7 @@ func New(dataDir, downloadDir, binary string) (*App, error) {
 		_ = a.stateDB.Close()
 		return nil, fmt.Errorf("状态数据版本 %d 高于当前程序支持版本 3，请使用较新版本程序", a.state.SchemaVersion)
 	}
+	a.xhsBrowser.app = a
 	migrateState(&a.state)
 	legacyCookiePath := a.state.Settings.BilibiliCookiesFile
 	if legacyCookiePath == "" {
@@ -248,23 +268,25 @@ func migrateState(state *State) {
 	for i := range state.Events {
 		state.Events[i].Message = sanitizeCookieFailure(state.Events[i].Message)
 	}
-	if state.Settings.DownloadMinInterval == 0 {
-		state.Settings.DownloadMinInterval = state.Settings.BilibiliMinInterval
-		if state.Settings.DownloadMinInterval == 0 {
-			state.Settings.DownloadMinInterval = 1
+	normalizeDownloadSettings(&state.Settings)
+	if state.NextPlatformDownloadAt == nil {
+		state.NextPlatformDownloadAt = map[PlatformID]time.Time{}
+	}
+	if _, ok := state.NextPlatformDownloadAt[PlatformBilibili]; !ok {
+		if state.NextBilibiliDownloadAt != nil {
+			state.NextPlatformDownloadAt[PlatformBilibili] = *state.NextBilibiliDownloadAt
+		} else if state.NextDownloadAt != nil {
+			state.NextPlatformDownloadAt[PlatformBilibili] = *state.NextDownloadAt
 		}
 	}
-	if state.Settings.DownloadMaxInterval == 0 {
-		state.Settings.DownloadMaxInterval = state.Settings.BilibiliMaxInterval
-		if state.Settings.DownloadMaxInterval == 0 {
-			state.Settings.DownloadMaxInterval = 3
+	var earliest *time.Time
+	for _, at := range state.NextPlatformDownloadAt {
+		if earliest == nil || at.Before(*earliest) {
+			copy := at
+			earliest = &copy
 		}
 	}
-	state.Settings.BilibiliMinInterval = state.Settings.DownloadMinInterval
-	state.Settings.BilibiliMaxInterval = state.Settings.DownloadMaxInterval
-	if state.NextDownloadAt == nil {
-		state.NextDownloadAt = state.NextBilibiliDownloadAt
-	}
+	state.NextDownloadAt = earliest
 	if state.BilibiliBlockedUntil != nil {
 		if state.PlatformCooldowns == nil {
 			state.PlatformCooldowns = map[PlatformID]time.Time{}
@@ -332,6 +354,56 @@ func migrateState(state *State) {
 	}
 	state.SchemaVersion = 3
 }
+
+func normalizeDownloadSettings(settings *Settings) {
+	if settings.DownloadPolicies == nil {
+		settings.DownloadPolicies = map[PlatformID]DownloadPolicy{}
+	}
+	legacyConcurrency := settings.Concurrency
+	if legacyConcurrency < 1 || legacyConcurrency > 4 {
+		legacyConcurrency = 1
+	}
+	legacyMin := settings.DownloadMinInterval
+	if legacyMin < 1 {
+		legacyMin = settings.BilibiliMinInterval
+	}
+	if legacyMin < 1 || legacyMin > 1440 {
+		legacyMin = 1
+	}
+	legacyMax := settings.DownloadMaxInterval
+	if legacyMax < legacyMin {
+		legacyMax = settings.BilibiliMaxInterval
+	}
+	if legacyMax < legacyMin || legacyMax > 1440 {
+		legacyMax = max(3, legacyMin)
+	}
+	if _, ok := settings.DownloadPolicies[PlatformBilibili]; !ok {
+		settings.DownloadPolicies[PlatformBilibili] = DownloadPolicy{Concurrency: legacyConcurrency, MinInterval: legacyMin, MaxInterval: legacyMax}
+	}
+	if _, ok := settings.DownloadPolicies[PlatformXiaohongshu]; !ok {
+		settings.DownloadPolicies[PlatformXiaohongshu] = DownloadPolicy{Concurrency: 1, MinInterval: 10, MaxInterval: 20}
+	}
+	if settings.XHSAPIRateLimit == 0 {
+		settings.XHSAPIRateLimit = 0.2
+	}
+	for _, platform := range []PlatformID{PlatformBilibili, PlatformXiaohongshu} {
+		policy := settings.DownloadPolicies[platform]
+		if policy.Concurrency < 1 || policy.Concurrency > 4 {
+			policy.Concurrency = 1
+		}
+		if policy.MinInterval < 1 || policy.MinInterval > 1440 {
+			policy.MinInterval = 1
+		}
+		if policy.MaxInterval < policy.MinInterval || policy.MaxInterval > 1440 {
+			policy.MaxInterval = max(policy.MinInterval, 3)
+		}
+		settings.DownloadPolicies[platform] = policy
+	}
+	bilibili := settings.DownloadPolicies[PlatformBilibili]
+	settings.Concurrency = bilibili.Concurrency
+	settings.DownloadMinInterval, settings.BilibiliMinInterval = bilibili.MinInterval, bilibili.MinInterval
+	settings.DownloadMaxInterval, settings.BilibiliMaxInterval = bilibili.MaxInterval, bilibili.MaxInterval
+}
 func cloneState(s State) State {
 	data, _ := json.Marshal(s)
 	var out State
@@ -352,9 +424,20 @@ func (a *App) persist() error {
 	if err != nil {
 		return err
 	}
-	_, err = a.stateDB.Exec(`INSERT INTO app_state (id, payload) VALUES (1, ?)
-		ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = CURRENT_TIMESTAMP`, string(data))
-	return err
+	tx, err := a.stateDB.Begin()
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`INSERT INTO app_state (id, payload) VALUES (1, ?)
+		ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = CURRENT_TIMESTAMP`, string(data)); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if _, err = tx.Exec(`UPDATE xhs_api_bucket SET qps = ? WHERE id = 1`, a.state.Settings.XHSAPIRateLimit); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
 }
 func (a *App) transaction(fn func() error) error {
 	a.mu.Lock()

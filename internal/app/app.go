@@ -255,20 +255,7 @@ func (a *App) TaskAction(taskID, action string) error {
 func (a *App) UpdateSettings(s Settings) error {
 	s.BilibiliCookiesFile = ""
 	s.CookiesFile = ""
-	if s.DownloadMinInterval == 0 {
-		s.DownloadMinInterval = s.BilibiliMinInterval
-		if s.DownloadMinInterval == 0 {
-			s.DownloadMinInterval = 1
-		}
-	}
-	if s.DownloadMaxInterval == 0 {
-		s.DownloadMaxInterval = s.BilibiliMaxInterval
-		if s.DownloadMaxInterval == 0 {
-			s.DownloadMaxInterval = 3
-		}
-	}
-	s.BilibiliMinInterval = s.DownloadMinInterval
-	s.BilibiliMaxInterval = s.DownloadMaxInterval
+	normalizeDownloadSettings(&s)
 	s.ProxyURL = strings.TrimSpace(s.ProxyURL)
 	if err := validateProxy(s.ProxyURL); err != nil {
 		return err
@@ -276,13 +263,22 @@ func (a *App) UpdateSettings(s Settings) error {
 	if math.IsNaN(s.MaxDownloadSpeed) || math.IsInf(s.MaxDownloadSpeed, 0) || s.MaxDownloadSpeed < 0 || s.MaxDownloadSpeed > 100000 || (s.MaxDownloadSpeed > 0 && s.MaxDownloadSpeed < 0.001) {
 		return errors.New("最大下载速度应为 0 或 0.001–100000 MB/s，0 表示不限速")
 	}
-	if s.Concurrency < 1 || s.Concurrency > 4 || s.Interval < 1 || s.Interval > 1440 || !validQuality(s.Quality) {
-		return errors.New("并发数应为 1–4，检查间隔应为 1–1440 分钟，请选择有效画质")
+	if s.Interval < 1 || s.Interval > 1440 || !validQuality(s.Quality) {
+		return errors.New("检查间隔应为 1–1440 分钟，请选择有效画质")
 	}
-	if s.DownloadMinInterval < 1 || s.DownloadMaxInterval < s.DownloadMinInterval || s.DownloadMaxInterval > 1440 {
-		return errors.New("下载间隔应为 1–1440 分钟，最大值不能小于最小值")
+	for _, platform := range []PlatformID{PlatformBilibili, PlatformXiaohongshu} {
+		policy, ok := s.DownloadPolicies[platform]
+		if !ok || policy.Concurrency < 1 || policy.Concurrency > 4 || policy.MinInterval < 1 || policy.MaxInterval < policy.MinInterval || policy.MaxInterval > 1440 {
+			return fmt.Errorf("%s 下载并发应为 1–4，间隔应为 1–1440 分钟，最大间隔不能小于最小间隔", contentPlatformLabel(platform))
+		}
 	}
-	return a.transaction(func() error { a.state.Settings = s; a.event("success", "全局设置已保存"); return nil })
+	if len(s.DownloadPolicies) != 2 {
+		return errors.New("下载策略只支持 B 站和小红书")
+	}
+	if math.IsNaN(s.XHSAPIRateLimit) || math.IsInf(s.XHSAPIRateLimit, 0) || s.XHSAPIRateLimit < 0.05 || s.XHSAPIRateLimit > 1 {
+		return errors.New("小红书 API QPS 应为 0.05–1.0")
+	}
+	return a.transaction(func() error { a.state.Settings = s; a.event("success", "各平台下载设置已保存"); return nil })
 }
 func (a *App) SetPaused(paused bool) error {
 	return a.transaction(func() error { a.state.Paused = paused; return nil })

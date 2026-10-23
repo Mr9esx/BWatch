@@ -182,7 +182,7 @@ func (xiaohongshuAdapter) NormalizeCreatorURL(raw string) (CreatorRef, error) {
 	return CreatorRef{Platform: PlatformXiaohongshu, URL: u.String(), ID: strings.ToLower(parts[2])}, nil
 }
 func (xiaohongshuAdapter) Scan(ctx context.Context, a *App, creator Creator, _ Settings) (PlatformFeed, error) {
-	return a.scanXHSAPI(ctx, creator)
+	return a.scanXHSAPI(ctx, creator, false)
 }
 
 func (p PlatformID) String() string { return string(p) }
